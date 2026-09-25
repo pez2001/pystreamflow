@@ -61,8 +61,15 @@ class MediaTransformNode(BaseNode):
             logger.warning("node %s (%s): %s - passing the item through unchanged",
                            self.id, type(self).__name__, self._last_error)
             result = item
-        self.emit('out', result)
+            self.emit('out', result)
+            return result
+        self.emit_result(item, result)
         return result
+
+    def emit_result(self, item: MediaItem, result: Any) -> None:
+        """Emit a successful transform's result. Default: ``out``;
+        override to feed additional ports as well."""
+        self.emit('out', result)
 
     async def process(self):
         while self._running:

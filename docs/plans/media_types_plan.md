@@ -118,6 +118,17 @@ Alle bauen auf einer neuen Basis `MediaTransformNode` auf, analog zu `SingleInpu
 
 ### Phase 4: Audio (Extra `[audio]`: soundfile und numpy, ffmpeg für MP3/AAC)
 
+> **Status: umgesetzt.** Code in `nodes/audio_nodes.py`, `nodes/speech_to_text.py` und `core/ffmpeg.py`, Tests in `tests/test_media_phase4.py`, Doku im Abschnitt „Audio Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Audio-Chunks sind kleine 16-Bit-WAV-Dateien statt roher PCM-Blöcke. Damit ist jeder Chunk selbstbeschreibend und in der Live-View abspielbar; der Overhead liegt bei 44 Byte pro Chunk. Die Verarbeitungs-Nodes geben immer WAV aus.
+> - libsndfile ≥ 1.1 (in den soundfile-Wheels enthalten) kann MP3 lesen und schreiben. ffmpeg ist deshalb nur für AAC/M4A, Opus-Ausgabe und Audiospuren aus Videos nötig. Es läuft in einem Worker-Thread über `subprocess.run` mit Timeout und Temp-Dateien. Das funktioniert auch unter Windows, `core/subprocess_exec.py` wird dafür nicht gebraucht.
+> - `AudioDecodeNode` liest Chunks blockweise (lange Dateien müssen nicht als Rohdaten in den Speicher), markiert den letzten Chunk mit `last` und nimmt auch Videos an (Audiospur über ffmpeg).
+> - `AudioEncodeNode` und `AudioSegmentNode` schließen ab bei: `segment_s`, einem ganzen `audio`-Item, einem `last`-Chunk, einem Item am neuen Eingang `flush` oder nach `flush_idle_s` ohne Input. Der Plan nannte hier nur „Segment oder Trigger“.
+> - `AudioResampleNode` arbeitet mit Tiefpass und linearer Interpolation ohne scipy. Das reicht für Sprache; jeder Chunk wird einzeln umgerechnet.
+> - `AudioLevelNode` liefert ein Dict auf `out` und zusätzlich die nackten Zahlen auf `rms_db`/`peak_db`, damit Compare- und Threshold-Nodes direkt anschließen können.
+> - `AudioSegmentNode` misst in 20-ms-Fenstern, die Schnitte liegen also auf ±20 ms genau. Er schneidet nur an Stille oder nach Zeit; eine echte Sprach-Aktivitätserkennung (VAD) gibt es nicht.
+> - Offene Frage STT: beide Wege umgesetzt. `backend: api` (Standard, OpenAI-kompatibles `/audio/transcriptions`, keine neue Abhängigkeit) oder `backend: local` (faster-whisper, Extra `[stt]`). LM Studio selbst bietet keinen Transkriptions-Endpoint.
+> - Offen: Das Docker-Image enthält weder numpy/soundfile noch ffmpeg (kommt mit Phase 7).
+
 | Node | Funktion |
 |---|---|
 | `AudioDecodeNode` | Datei zu PCM; Ausgabe als ganzes Stück oder in Chunks (`chunk_ms`) als `audio_chunk` mit `sample_rate`, `channels` und `pts` |

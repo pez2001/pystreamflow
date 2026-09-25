@@ -2,6 +2,7 @@ from .input_file import FileInputNode
 from .input_directory import DirectoryInputNode
 from .media_file_input import MediaFileInputNode
 from .media_file_output import MediaFileOutputNode
+from .speech_to_text import SpeechToTextNode
 from .input_web import WebInputNode
 from .input_api import ApiInputNode
 from .output_api import ApiOutputNode
@@ -98,7 +99,7 @@ __all__ = [
     "FileInputNode","DirectoryInputNode","WebInputNode","ApiInputNode","ApiOutputNode","LMStudioNode",
     "StackNode","FIFOQueueNode","LIFOQueueNode","ClockNode",
     "HTMLScraperNode",
-    "MediaFileInputNode","MediaFileOutputNode",
+    "MediaFileInputNode","MediaFileOutputNode","SpeechToTextNode",
     "Base64DecodeNode",
     "Base64EncodeNode",
     "UserPromptNode",
@@ -141,3 +142,18 @@ else:
     for _name in IMAGE_NODE_TYPES:
         globals()[_name] = getattr(_image_nodes, _name)
     __all__ += list(IMAGE_NODE_TYPES)
+
+# Media plan phase 4: the `pystreamflow[audio]` extra (numpy + soundfile).
+AUDIO_NODE_TYPES = (
+    "AudioDecodeNode", "AudioEncodeNode", "AudioResampleNode", "AudioGainNode",
+    "AudioNormalizeNode", "AudioLevelNode", "AudioSegmentNode",
+)
+try:
+    from . import audio_nodes as _audio_nodes
+except (ImportError, OSError) as _e:  # numpy/soundfile missing, or no libsndfile
+    for _name in AUDIO_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = f"needs numpy + soundfile: pip install 'pystreamflow[audio]' ({_e})"
+else:
+    for _name in AUDIO_NODE_TYPES:
+        globals()[_name] = getattr(_audio_nodes, _name)
+    __all__ += list(AUDIO_NODE_TYPES)

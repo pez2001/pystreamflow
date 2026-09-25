@@ -55,6 +55,13 @@ _OVERRIDES: dict[str, tuple[object, object]] = {
     "FileInputNode": ([], DEFAULT_OUTPUT_PORTS),
     # Media plan phase 2: reads one whole file per item, pure source.
     "MediaFileInputNode": ([], DEFAULT_OUTPUT_PORTS),
+    # Media plan phase 4 (nodes/audio_nodes.py, nodes/speech_to_text.py):
+    # 'flush' ends the collected file/segment; the level node also emits
+    # its two dB readings as bare numbers.
+    "AudioEncodeNode": (["in", "flush"], DEFAULT_OUTPUT_PORTS),
+    "AudioSegmentNode": (["in", "flush"], DEFAULT_OUTPUT_PORTS),
+    "AudioLevelNode": (DEFAULT_INPUT_PORTS, ["out", "rms_db", "peak_db"]),
+    "SpeechToTextNode": (DEFAULT_INPUT_PORTS, ["out", "details", "errors"]),
     # DirectoryInputNode: a pure source like FileInputNode, but with two
     # distinct, fixed output ports instead of one - discovered files and
     # discovered subdirectories are kept on separate ports (`files`/

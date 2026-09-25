@@ -165,6 +165,23 @@ FIELD_OVERRIDES["ImageThumbnailNode"] = {
 }
 
 
+# Media plan phase 4 - verified against nodes/audio_nodes.py and
+# nodes/speech_to_text.py (validated in init()/configure()).
+FIELD_OVERRIDES["AudioEncodeNode"] = {
+    "format": {"kind": "enum", "options": ["wav", "flac", "ogg", "mp3", "m4a", "opus"]},
+}
+FIELD_OVERRIDES["AudioSegmentNode"] = {
+    "mode": {"kind": "enum", "options": ["silence", "time"]},
+}
+FIELD_OVERRIDES["AudioNormalizeNode"] = {
+    "mode": {"kind": "enum", "options": ["peak", "rms"]},
+}
+FIELD_OVERRIDES["SpeechToTextNode"] = {
+    "backend": {"kind": "enum", "options": ["api", "local"]},
+    "device": {"kind": "enum", "options": ["auto", "cpu", "cuda"]},
+}
+
+
 def get_field_schema(type_name: str) -> dict[str, dict]:
     """Field-level overrides for one node type, global ones first so a
     type-specific override (none currently collide, but future ones
