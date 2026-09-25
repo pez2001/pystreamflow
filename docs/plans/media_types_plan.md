@@ -33,6 +33,14 @@ Fazit: Die Engine-Architektur mit async Pipes und Fan-out/Fan-in trägt Medien. 
 
 ### Phase 1: Fundament (Kern, ohne neue Abhängigkeiten)
 
+> **Status: umgesetzt.** Code in `core/media.py`, `core/blob_store.py`, `core/node.py`, `core/stream.py`, `core/engine.py`, `core/metrics.py`, `api/server.py` und `mcp/server.py`; Tests in `tests/test_media_phase1.py`; Beschreibung im Abschnitt „Media Items“ von `docs/developer_guide.md`. Abweichungen und Ergänzungen zum Plan:
+> - Lebensdauer der Blobs per TTL (ab letztem Lesen oder Schreiben) plus LRU-Obergrenze, keine Referenzzählung.
+> - Medien-Ports deklariert eine Node-Klasse über `MEDIA_OUTPUT_PORTS = {port: drop_policy}`. Port-`dtype`s kommen erst in Phase 6b.
+> - Neue Drop-Policy `drop_oldest` (behält die neuesten Frames). `drop` verwirft jetzt sofort, wenn der Puffer voll ist, und nicht erst nach einem Timeout.
+> - `BaseNode.emit_wait()` wartet auf die Puts, damit Decoder in Phase 5 echten Gegendruck bekommen. `emit()` plant die Puts weiterhin im Hintergrund ein.
+> - `GET /nodes/{id}` gibt es nicht. Die zentrale Serialisierung greift stattdessen bei `/nodes/{id}/last`, `/nodes/{id}/emit`, `/reflection/nodes[/{id}]`, `/sessions/{id}/nodes/{id}` und allen MCP-Tool-Ergebnissen.
+> - `GET /media/{ref}` liefert nur Bild-, Audio- und Video-Typen mit ihrem MIME-Typ aus, alles andere als `application/octet-stream` mit `nosniff`. Weil `<img>` keinen Auth-Header senden kann, muss die Live-View-Vorschau in Phase 6a die Datei per `fetch()` mit API-Key laden.
+
 **1.1 `core/media.py`: Datentyp `MediaItem`**
 ```python
 @dataclass

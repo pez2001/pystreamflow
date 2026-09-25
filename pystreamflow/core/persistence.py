@@ -73,7 +73,13 @@ def save_workflow(graph: Graph, path: str):
         'version': getattr(graph, 'version', 1),
         'meta': getattr(graph, 'meta', {}),
         'nodes': [vars(n) for n in graph.nodes],
-        'edges': [vars(e) for e in graph.edges]
+        # `buffer` is optional per-edge queue config (media plan phase
+        # 1.5); left out when unset so existing workflow files round-trip
+        # unchanged.
+        'edges': [
+            {k: v for k, v in vars(e).items() if not (k == 'buffer' and v is None)}
+            for e in graph.edges
+        ]
     }
     with open(path, 'w') as f:
         yaml.dump(data, f)

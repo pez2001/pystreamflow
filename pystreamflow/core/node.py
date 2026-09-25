@@ -4,6 +4,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .media import item_size, last_item_max_bytes, summarize_for_history
 from .stream import FanInPipe, Pipe
 
 logger = logging.getLogger("pystreamflow.node")
@@ -42,6 +43,14 @@ class BaseNode(ABC):
     and returns promptly. ``stop()`` / ``pause()`` / ``resume()`` are the
     same - schedule-and-return, never blocking on process() itself.
     """
+
+    # Output ports that carry media streams, mapped to the drop policy an
+    # edge leaving them gets by default: "drop_oldest"/"drop" for live
+    # frames or audio chunks, "block" for whole files that must not be
+    # lost. Such edges get a bounded queue (see core/engine.py's
+    # edge_pipe(); media plan phase 1.5); a workflow can override it per
+    # edge with `buffer: {maxsize, drop_policy}`.
+    MEDIA_OUTPUT_PORTS: dict[str, str] = {}
 
     def __init__(self, node_id: str, config: dict[str, Any] | None = None):
         self.id = node_id
@@ -107,6 +116,12 @@ class BaseNode(ABC):
         self._running = False
         self._last_items: list[Any] = []
         self._max_last = int(self.config.get('max_last', 100))
+        # Media plan phase 1.3: _last_items keeps large binary payloads only
+        # as summaries (see _record_last()), so manual_emit() - which has to
+        # replay the real thing - reads each port's latest real item from
+        # here instead. One item per port, not max_last of them.
+        self._last_real: dict[str, Any] = {}
+        self._max_last_item_bytes = int(self.config.get('max_last_item_bytes', last_item_max_bytes()))
         self._health = 'unknown'
         self._error_count = 0
         self._last_error = None
@@ -492,7 +507,7 @@ class BaseNode(ABC):
             item = await original_get()
             node._items_in += 1
             try:
-                node._bytes_in += len(str(item).encode('utf-8'))
+                node._bytes_in += item_size(item)
             except Exception:
                 pass
             return item
@@ -796,7 +811,21 @@ class BaseNode(ABC):
         self.config[name] = value
         if hasattr(self, name):
             setattr(self, name, value)
-        self._last_items.append({'port': f'attr:{name}', 'item': value})
+        self._record_last({'port': f'attr:{name}', 'item': value})
+
+    def _record_last(self, entry: dict) -> None:
+        """Append ``entry`` to the live-view/replay history, trimmed to
+        ``max_last`` entries. An ``'item'`` holding a large binary payload
+        (raw ``bytes``, or an inline ``MediaItem``) is stored as a summary
+        / blob-ref instead - see ``core/media.py``'s
+        ``summarize_for_history()`` - so 100 history entries of video
+        frames don't pin 100 frames in memory."""
+        if 'item' in entry:
+            item = entry['item']
+            summarized = summarize_for_history(item, self._max_last_item_bytes)
+            if summarized is not item:
+                entry = {**entry, 'item': summarized}
+        self._last_items.append(entry)
         if len(self._last_items) > self._max_last:
             self._last_items = self._last_items[-self._max_last:]
 
@@ -828,16 +857,7 @@ class BaseNode(ABC):
 
     def emit(self, name: str, item: Any):
         """Emit item to output port, update stats and last items buffer."""
-        # record last items
-        self._last_items.append({'port': name, 'item': item})
-        if len(self._last_items) > self._max_last:
-            self._last_items = self._last_items[-self._max_last:]
-        # stats
-        self._items_out += 1
-        try:
-            self._bytes_out += len(str(item).encode('utf-8'))
-        except Exception:
-            pass
+        self._record_emit(name, item)
         # Phase 1 fan-out change: broadcast to every live consumer pipe
         # currently under this port name, not just a single one - see
         # add_output()'s docstring. Snapshotted with list(...) so a
@@ -856,19 +876,58 @@ class BaseNode(ABC):
         # un-unwrapped item on a second port. Imported lazily to avoid a
         # circular import (core.engine imports core.registry, which
         # imports every node module, which imports this one).
+        for pipe, payload in self._deliveries(name, item):
+            # Schedule the put, but keep a reference and a done-callback
+            # so the task can't be garbage-collected mid-flight and so a
+            # failure (e.g. a bounded Pipe that never drains) surfaces
+            # in this node's health/last_error instead of only as an
+            # untraceable "Task exception was never retrieved" warning.
+            task = asyncio.create_task(pipe.put(payload))
+            self._emit_tasks.add(task)
+            task.add_done_callback(lambda t, port=name: self._on_emit_done(t, port))
+
+    def _record_emit(self, name: str, item: Any) -> None:
+        """Last-items history and stats bookkeeping shared by ``emit()`` and
+        ``emit_wait()``. ``item_size()`` never builds ``str()`` of a binary
+        payload (its repr is ~4x the payload size; media plan phase 1.3)."""
+        self._last_real[name] = item
+        self._record_last({'port': name, 'item': item})
+        self._items_out += 1
+        try:
+            self._bytes_out += item_size(item)
+        except Exception:
+            pass
+
+    def _deliveries(self, name: str, item: Any) -> list[tuple[Pipe, Any]]:
+        """Every ``(pipe, payload)`` an emit on port ``name`` delivers to."""
         pipes = self.outputs.get(name)
-        if pipes:
-            from .engine import _clean_attribute_value
-            for pipe, kind in list(pipes):
-                payload = _clean_attribute_value(item) if kind == 'raw' else item
-                # Schedule the put, but keep a reference and a done-callback
-                # so the task can't be garbage-collected mid-flight and so a
-                # failure (e.g. a bounded Pipe that never drains) surfaces
-                # in this node's health/last_error instead of only as an
-                # untraceable "Task exception was never retrieved" warning.
-                task = asyncio.create_task(pipe.put(payload))
-                self._emit_tasks.add(task)
-                task.add_done_callback(lambda t, port=name: self._on_emit_done(t, port))
+        if not pipes:
+            return []
+        from .engine import _clean_attribute_value
+        return [
+            (pipe, _clean_attribute_value(item) if kind == 'raw' else item)
+            for pipe, kind in list(pipes)
+        ]
+
+    async def emit_wait(self, name: str, item: Any) -> None:
+        """Like ``emit()``, but awaits every consumer's ``put()`` instead
+        of scheduling it as a background task - so a producer that uses
+        this is actually slowed down by a bounded, ``block``-policy edge
+        (media plan phase 1.5) rather than piling up pending put tasks.
+        Meant for high-rate media sources (decoders, cameras)."""
+        self._record_emit(name, item)
+        for pipe, payload in self._deliveries(name, item):
+            try:
+                await pipe.put(payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._error_count += 1
+                self._last_error = str(exc)
+                logger.error(
+                    "node %s (%s): emit_wait('%s', ...) failed",
+                    self.id, type(self).__name__, name, exc_info=exc,
+                )
 
     def record_output(self, entry: dict) -> None:
         """Record something this node actually did, for the live view
@@ -895,9 +954,7 @@ class BaseNode(ABC):
         skips these, exactly as it should for a sink with nothing to
         replay onto.
         """
-        self._last_items.append(entry)
-        if len(self._last_items) > self._max_last:
-            self._last_items = self._last_items[-self._max_last:]
+        self._record_last(entry)
 
     def manual_emit(self) -> dict[str, Any]:
         """Re-emit each output port's most recently emitted item again,
@@ -938,7 +995,9 @@ class BaseNode(ABC):
             port = record.get('port')
             if not isinstance(port, str) or port.startswith('attr:') or port in replayed:
                 continue
-            item = record.get('item')
+            # The history may only hold a summary of a large payload (see
+            # _record_last()); replay the real item emit() kept for this port.
+            item = self._last_real.get(port, record.get('item'))
             self.emit(port, item)
             replayed[port] = item
         # Feedback: "user input node is not able to emit the prompt value
@@ -1067,6 +1126,7 @@ class BaseNode(ABC):
         self._bytes_in = 0
         self._bytes_out = 0
         self._last_items = []
+        self._last_real = {}
         if self._running:
             self._start_ts = time.monotonic()
 

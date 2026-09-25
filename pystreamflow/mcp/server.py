@@ -45,6 +45,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import get_route_path
+from ..core.media import to_jsonable
 from ..core.web_server import _nodes, http_endpoint_info
 
 logger = logging.getLogger("pystreamflow.mcp")
@@ -442,7 +443,6 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
     # second time (they're already behind their own transport-level auth -
     # see _MCPTransportAuth below).
     from ..core.session_manager import session_manager
-    from ..core.stream import Pipe
     import asyncio
 
     args = args or {}
@@ -737,6 +737,7 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
             _cancel_attribute_pump,
             _edge_pipes,
             _pump_attribute,
+            edge_pipe as make_edge_pipe,
         )
         from ..core.port_schema import validate_edge
 
@@ -752,7 +753,7 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
         err = validate_edge(type(src).__name__, source_port, type(tgt).__name__, target_port, edge_type)
         if err:
             return {"error": err}
-        pipe = Pipe()
+        pipe = make_edge_pipe(src, source_port)
         # Phase 2 of the wire-kind-unification design: a 'raw' edge is
         # wired exactly like a 'data' edge below - only the recorded
         # delivery kind differs, which is what makes BaseNode.emit()
@@ -965,7 +966,10 @@ def _unwrap(result: Dict[str, Any]) -> Any:
     # intact end to end.
     if "error" in result:
         raise ToolError(result["error"])
-    return result.get("result")
+    # Binary payloads/MediaItems -> JSON-safe summaries (media plan phase
+    # 1.4) - the SDK would otherwise fail serializing raw bytes, and a
+    # model has no use for megabytes of base64 in its context anyway.
+    return to_jsonable(result.get("result"))
 
 
 _TOOL_DESCRIPTIONS = {t.name: t.description for t in TOOLS}
@@ -1335,7 +1339,7 @@ def list_tools(authorization: str = Header(None), x_api_key: str = Header(None, 
 @app.post("/call")
 async def call_tool(req: ToolCall, authorization: str = Header(None), x_api_key: str = Header(None, alias="X-API-Key")):
     require_auth(authorization, x_api_key)
-    return await _execute_tool(req.tool, req.arguments or {})
+    return to_jsonable(await _execute_tool(req.tool, req.arguments or {}))
 
 
 # The real MCP transport routes, merged directly into this app's own
