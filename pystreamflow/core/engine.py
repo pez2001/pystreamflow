@@ -286,7 +286,14 @@ class Engine:
         for e in self.graph.edges:
             src_node = self.node_instances[e.source]
             tgt_node = self.node_instances[e.target]
-            key = (e.source, e.target)
+            # One pipe per edge. This used to be keyed by the node pair
+            # (source, target) alone, so two edges between the same two
+            # nodes - e.g. VideoDecodeNode's out->in and audio->audio into
+            # one VideoEncodeNode, or LMStudioNode's results and stats into
+            # one sink - silently shared a single pipe: the target's two
+            # input ports both read from it and items landed on whichever
+            # port happened to read first.
+            key = (e.source, e.source_port, e.target, e.target_port, e.type)
             if key not in self.pipes:
                 self.pipes[key] = edge_pipe(src_node, e.source_port, getattr(e, 'buffer', None))
             pipe = self.pipes[key]

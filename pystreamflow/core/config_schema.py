@@ -182,6 +182,23 @@ FIELD_OVERRIDES["SpeechToTextNode"] = {
 }
 
 
+# Media plan phase 5 - verified against nodes/video_nodes.py.
+_VIDEO_BACKEND = {"kind": "enum", "options": ["auto", "pyav", "ffmpeg"]}
+FIELD_OVERRIDES["VideoDecodeNode"] = {
+    "frame_format": {"kind": "enum", "options": ["jpeg", "png"]},
+    "backend": _VIDEO_BACKEND,
+}
+FIELD_OVERRIDES["VideoFrameSampleNode"] = {
+    "mode": {"kind": "enum", "options": ["every_n", "fps", "keyframes"]},
+}
+FIELD_OVERRIDES["VideoEncodeNode"] = {
+    "format": {"kind": "enum", "options": ["mp4", "webm"]},
+    "backend": _VIDEO_BACKEND,
+}
+FIELD_OVERRIDES["VideoInfoNode"] = {"backend": _VIDEO_BACKEND}
+FIELD_OVERRIDES["VideoThumbnailNode"] = {"backend": _VIDEO_BACKEND}
+
+
 def get_field_schema(type_name: str) -> dict[str, dict]:
     """Field-level overrides for one node type, global ones first so a
     type-specific override (none currently collide, but future ones

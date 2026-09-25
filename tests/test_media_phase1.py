@@ -420,7 +420,7 @@ async def test_engine_applies_edge_buffer_and_rejects_bad_one():
     eng._instantiate_nodes()
     try:
         eng._wire_edges()
-        pipe = eng.pipes[("a", "b")]
+        pipe = eng.pipes[("a", "out", "b", "in", "data")]
         assert pipe.queue.maxsize == 4 and pipe.drop_policy == "drop"
     finally:
         _nodes.pop("a", None)

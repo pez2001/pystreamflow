@@ -157,3 +157,18 @@ else:
     for _name in AUDIO_NODE_TYPES:
         globals()[_name] = getattr(_audio_nodes, _name)
     __all__ += list(AUDIO_NODE_TYPES)
+
+# Media plan phase 5: video needs PyAV (`pystreamflow[video]`) or, as a
+# fallback, the ffmpeg executable - the module itself imports without
+# either, so availability is checked explicitly.
+VIDEO_NODE_TYPES = (
+    "VideoDecodeNode", "VideoFrameSampleNode", "VideoEncodeNode", "VideoInfoNode", "VideoThumbnailNode",
+)
+from . import video_nodes as _video_nodes  # noqa: E402
+if _video_nodes.available():
+    for _name in VIDEO_NODE_TYPES:
+        globals()[_name] = getattr(_video_nodes, _name)
+    __all__ += list(VIDEO_NODE_TYPES)
+else:
+    for _name in VIDEO_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = "needs PyAV (pip install 'pystreamflow[video]') or the ffmpeg executable"

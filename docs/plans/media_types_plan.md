@@ -141,6 +141,16 @@ Alle bauen auf einer neuen Basis `MediaTransformNode` auf, analog zu `SingleInpu
 
 ### Phase 5: Video (Extra `[video]`: PyAV oder ffmpeg-Subprozess)
 
+> **Status: umgesetzt.** Code in `nodes/video_nodes.py`, Tests in `tests/test_media_phase5.py`, Doku im Abschnitt „Video Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Wie geplant ist PyAV der Standard. Der ffmpeg-Fallback deckt Frames (JPEG über eine MJPEG-Pipe), Info (ffprobe), Thumbnail und Encode (concat-Demuxer) ab, liefert aber keine Audiospur und keine PNG-Frames. Registriert werden die Video-Nodes, sobald PyAV **oder** ffmpeg vorhanden ist. Die JPEG-Frames erzeugt PyAV direkt über seinen MJPEG-Codec, Pillow ist dafür nicht nötig.
+> - `VideoDecodeNode` sampelt selbst per `fps` (auf festem Raster, übersprungene Frames werden gar nicht erst kodiert) und kann per `max_side` verkleinern. Das spart viel Arbeit gegenüber „alles dekodieren, dann `VideoFrameSampleNode`“; die Sample-Node gibt es trotzdem (every_n, fps, keyframes).
+> - Echtzeit-Quellen (offene Frage): `VideoDecodeNode.source` nimmt auch Stream-URLs (RTSP über TCP, HTTP) und verbindet nach `reconnect_s` neu. Einen `CameraInputNode` für lokale Webcams gibt es nicht; das lässt sich hier ohne Kamera nicht testen.
+> - Backpressure: Beide Ausgänge des Decoders blockieren (`emit_wait`), ein File wird also nie schneller dekodiert als verarbeitet. Für Live-Kameras dokumentiert: Edge mit `buffer: {drop_policy: drop_oldest}`.
+> - `VideoEncodeNode` schreibt inkrementell in eine Temp-Datei (kein Frame-Puffer im RAM), Audio kommt über den Port `audio`. Nach dem `last`-Frame wartet er `audio_grace_s` auf nachlaufenden Ton. Frames und Audio werden per Lock serialisiert, weil PyAV-Container nicht threadsicher sind (sonst hing der ganze Prozess).
+> - Bug in der Engine gefunden und behoben (bestand schon vorher): Pipes waren pro Knotenpaar statt pro Kante angelegt. Zwei Kanten zwischen denselben zwei Nodes teilten sich eine Pipe.
+> - Metriken: Frames pro Sekunde ergeben sich in Prometheus aus `rate(pystreamflow_node_items_processed_total{node_id="…"}[1m])`, ein eigener Zähler kam nicht dazu. Drop-Rate und Blob-Store-Größe gibt es seit Phase 1.
+> - Offen: Das Docker-Image enthält weder PyAV noch ffmpeg (kommt mit Phase 7).
+
 Entscheidung: **PyAV** als Standard, weil es Frame-genauen Zugriff bietet und keine Pipe-Parser braucht. Wenn PyAV fehlt, wird auf einen **ffmpeg-Subprozess** über `subprocess_exec.py` zurückgefallen.
 
 | Node | Funktion |
