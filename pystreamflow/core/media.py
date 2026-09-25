@@ -27,6 +27,7 @@ can carry, for the live view, the reflection endpoints and the MCP tools.
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -90,6 +91,53 @@ def sniff_mime(data: bytes) -> str | None:
     if b.startswith(b"\x1a\x45\xdf\xa3"):
         return "video/webm" if b"webm" in b else "video/x-matroska"
     return None
+
+
+# mimetypes' own table is platform-dependent and misses or mislabels a
+# few common media types; these always win.
+_EXT_TO_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+    ".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".oga": "audio/ogg",
+    ".flac": "audio/flac", ".m4a": "audio/mp4", ".aac": "audio/aac", ".opus": "audio/ogg",
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+}
+_MIME_TO_EXT = {
+    "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+    "image/bmp": "bmp", "image/tiff": "tif", "audio/wav": "wav", "audio/x-wav": "wav",
+    "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "audio/mp4": "m4a",
+    "audio/aac": "aac", "video/mp4": "mp4", "video/webm": "webm", "video/x-matroska": "mkv",
+    "video/quicktime": "mov", "video/x-msvideo": "avi", "application/octet-stream": "bin",
+    "text/plain": "txt", "application/json": "json",
+}
+
+
+def mime_from_filename(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    ext = os.path.splitext(str(filename))[1].lower()
+    return _EXT_TO_MIME.get(ext) or mimetypes.guess_type(str(filename))[0]
+
+
+def guess_mime(data: bytes, filename: str | None = None) -> str:
+    """Magic bytes first (they describe what the data really is), then the
+    file extension, then ``application/octet-stream``."""
+    return sniff_mime(data) or mime_from_filename(filename) or "application/octet-stream"
+
+
+def is_media_filename(filename: str) -> bool:
+    """True if the extension names an image, audio or video format."""
+    return kind_for_mime(mime_from_filename(filename)) != "binary"
+
+
+def extension_for_mime(mime: str | None) -> str:
+    """File extension (without dot) for writing a payload of this type."""
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    if mime in _MIME_TO_EXT:
+        return _MIME_TO_EXT[mime]
+    ext = mimetypes.guess_extension(mime) if mime else None
+    return ext.lstrip(".") if ext else "bin"
 
 
 def kind_for_mime(mime: str | None) -> str:
@@ -211,6 +259,10 @@ class MediaItem:
         return MediaItem.from_bytes(
             data, kind=changes.pop("kind", self.kind), mime=changes.pop("mime", self.mime), meta=meta,
         )
+
+    def __repr__(self) -> str:
+        # Never the dataclass default, which would repr() the whole payload.
+        return f"MediaItem{self}"
 
     def __str__(self) -> str:
         parts = [self.mime]

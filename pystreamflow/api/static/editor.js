@@ -263,13 +263,17 @@
     // Feature request: "add a node to post data to external webservers" -
     // see pystreamflow/nodes/http_post_node.py.
     HttpPost: { type: 'HttpPostNode', label: 'HTTP Post', icon: '📤' },
+    MediaFileInput: { type: 'MediaFileInputNode', label: 'Media File Input', icon: '🖼️' },
+    MediaFileOutput: { type: 'MediaFileOutputNode', label: 'Media File Output', icon: '🗂️' },
   };
   const nodeDocs = {
-    WebInputNode: { desc: 'HTTP input via shared web server', url: '/docs/nodes/index.md#webinputnode' },
-    ApiInputNode: { desc: 'REST input: uri maps to a real POST endpoint at /api/<uri> on the shared web server; emits each request\'s JSON body', url: '/docs/nodes/index.md#apiinputnode' },
-    ApiOutputNode: { desc: 'REST output: uri maps to /api/<uri> (JSON) plus /api/<uri>/raw (same data, unencapsulated) on the shared web server; starts the server itself. Also has a graph-level "raw" output port (⇢ raw), wireable on the canvas, alongside the normal "out" port.', url: '/docs/nodes/index.md#apioutputnode' },
+    WebInputNode: { desc: 'HTTP input via shared web server: a JSON object body is emitted as-is, a file upload (multipart/form-data, or a raw image/audio/video/octet-stream body) as one media item per file', url: '/docs/nodes/index.md#webinputnode' },
+    ApiInputNode: { desc: 'REST input: uri maps to a real POST endpoint at /api/<uri> on the shared web server; emits each request\'s JSON body, or one media item per uploaded file (multipart/form-data or a raw image/audio/video/octet-stream body)', url: '/docs/nodes/index.md#apiinputnode' },
+    ApiOutputNode: { desc: 'REST output: uri maps to /api/<uri> (JSON) plus /api/<uri>/raw (same data, unencapsulated; a media item is served as the file itself) and /api/<uri>/media (newest media item) on the shared web server; starts the server itself. Also has a graph-level "raw" output port (⇢ raw), wireable on the canvas, alongside the normal "out" port.', url: '/docs/nodes/index.md#apioutputnode' },
     FileInputNode: { desc: 'Poll file for new bytes', url: '/docs/nodes/index.md' },
-    DirectoryInputNode: { desc: 'Watches a directory (path, optional recursive) and emits new files on `files`, new subdirectories on `dirs`', url: '/docs/nodes/index.md' },
+    DirectoryInputNode: { desc: 'Watches a directory (path, optional recursive) and emits new files on `files`, new subdirectories on `dirs`. Optional `extensions`/`media_only` filter; `emit_as: media` emits whole files as media items instead of paths', url: '/docs/nodes/index.md' },
+    MediaFileInputNode: { desc: 'Reads one image/audio/video file as a whole and emits it as a media item (emit_on: change = on start and whenever the file changes, start = once)', url: '/docs/nodes/index.md#media-nodes' },
+    MediaFileOutputNode: { desc: 'Writes each item to its own file (path_pattern with {node} {index:05d} {ext} {kind} {stem} {timestamp}; default "<files_dir>/media/{node}_{index:05d}.{ext}") and emits {path, mime, size}', url: '/docs/nodes/index.md#media-nodes' },
     JSONInputNode: { desc: 'Reads newline-delimited JSON from a real source (source: "stdin", the default, or a file path to tail) and emits each parsed value', url: '/docs/nodes/index.md' },
     LMStudioNode: { desc: 'LM Studio OpenAI compatible LLM', url: '/docs/nodes/index.md' },
     ScriptInputNode: { desc: 'Periodic script execution input', url: '/docs/nodes/index.md#scriptinput' },
@@ -308,8 +312,8 @@
     LIFOQueueNode: { desc: 'Last-in-first-out queue', url: '/docs/nodes/index.md#lifo' },
     ClockNode: { desc: 'CPU-style ticking emitter', url: '/docs/nodes/index.md#clock' },
     HTMLScraperNode: { desc: 'Extract data from HTML with CSS selectors or regex', url: '/docs/nodes/index.md#htmlscraper' },
-    Base64DecodeNode: { desc: 'Decode base64 encoded strings to text/bytes', url: '/docs/nodes/index.md#base64decode' },
-    Base64EncodeNode: { desc: 'Encode text/bytes to base64 string', url: '/docs/nodes/index.md#base64encode' },
+    Base64DecodeNode: { desc: 'Decode base64 encoded strings to text/bytes; a data: URL becomes a media item (output: auto|text|bytes|media)', url: '/docs/nodes/index.md#base64decode' },
+    Base64EncodeNode: { desc: 'Encode text/bytes/media items to a base64 string (data_url: true for data:<mime>;base64,...)', url: '/docs/nodes/index.md#base64encode' },
     UserPromptNode: { desc: 'Pause flow and wait for user input via user port', url: '/docs/nodes/index.md#userprompt' },
     RollingWindowBufferNode: { desc: 'Rolling window history buffer with triggerable flush', url: '/docs/nodes/index.md#rollingwindowbuffer' },
     ConstantValueNode: { desc: 'Emits one configured literal value with no metadata wrapper - the clean raw-value source for attribute wiring', url: '/docs/nodes/index.md#constantvalue' },
@@ -342,6 +346,7 @@
     Text: ['TextUpper', 'TextLower', 'TextTrim', 'TextReplace', 'TextSubstring', 'TextReverse', 'TextTitle', 'TextStrip', 'TextSplit', 'TextJoin'],
     'Line/Token': ['LineSplitter', 'Tokenizer', 'LineBuffer', 'TrimString', 'ListStrings', 'Table'],
     Control: ['Timer', 'Trigger', 'TimerTrigger', 'TriggerOn', 'TriggerOff', 'TriggerPause', 'TriggerIf', 'TriggerThreshold', 'TriggerDebounce', 'TriggerPulse', 'TriggerToggle', 'Cron'],
+    Media: ['MediaFileInput', 'MediaFileOutput'],
     Advanced: ['Subgraph', 'Stack', 'FIFOQueue', 'LIFOQueue', 'Clock', 'HTMLScraper', 'Base64Decode', 'Base64Encode', 'UserPrompt', 'RollingWindowBuffer', 'SyncBarrier', 'QueueGate'],
   };
 
@@ -1342,7 +1347,9 @@
     // user needs to configure day to day.
     ApiInputNode: { uri: '' },
     FileInputNode: { path: '', poll_interval: 1.0 },
-    DirectoryInputNode: { path: '', recursive: false, poll_interval: 2.0 },
+    DirectoryInputNode: { path: '', recursive: false, poll_interval: 2.0, extensions: '', media_only: false, emit_as: 'path' },
+    MediaFileInputNode: { path: '', emit_on: 'change', poll_interval: 1.0 },
+    MediaFileOutputNode: { path_pattern: '', overwrite: false },
     LMStudioNode: { base_url: 'http://localhost:1234/v1', model: 'local-model', api_key: 'lm-studio', system: '', timeout: 600 },
     ScriptInputNode: { script_path: '', interpreter: '', args: [], interval: 5.0, working_dir: '', timeout: 30.0, emit_mode: 'lines' },
     MQTTInputNode: { broker: 'localhost', port: 1883, topic: '#', client_id: '', username: '', password: '', qos: 0 },
@@ -1446,8 +1453,8 @@
     LIFOQueueNode: { max_size: 1000 },
     ClockNode: { interval: 1.0, start_value: 0, count_up: true, reset_on_input: false },
     HTMLScraperNode: { extractors: [], output_key: 'scraped' },
-    Base64DecodeNode: { output_encoding: 'utf-8', strip_whitespace: true, validate_padding: true },
-    Base64EncodeNode: { input_encoding: 'utf-8', output_encoding: 'utf-8', urlsafe: false, add_newlines: false, line_length: 76 },
+    Base64DecodeNode: { output_encoding: 'utf-8', strip_whitespace: true, validate_padding: true, output: 'auto' },
+    Base64EncodeNode: { input_encoding: 'utf-8', output_encoding: 'utf-8', urlsafe: false, add_newlines: false, line_length: 76, data_url: false },
     UserPromptNode: { prompt: 'Enter value:', timeout: 300.0, default: '' },
     RollingWindowBufferNode: { max_size: 1000, retain_after_flush: true, emit_passthrough: true },
 

@@ -74,6 +74,15 @@ Dazu kommt ein Helfer `sniff_mime(bytes)` über Magic Bytes für PNG, JPEG, GIF,
 
 ### Phase 2: Datei-Ein-/Ausgabe für Medien
 
+> **Status: umgesetzt.** Neue Nodes in `nodes/media_file_input.py` und `nodes/media_file_output.py`, HTTP-Teil in `core/media_http.py`, Tests in `tests/test_media_phase2.py`, Doku im Abschnitt „Media Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - `MediaFileInputNode`: `emit_on: change` sendet beim Start und bei jeder Änderung von Größe oder mtime, `start` nur einmal pro Pfad. Der Ausgang ist über `MEDIA_OUTPUT_PORTS` als `block` deklariert (ganze Dateien gehen nie verloren), gesendet wird per `emit_wait()`.
+> - `DirectoryInputNode`: neue Config `extensions`, `media_only` und `emit_as: path|media`. Ohne diese Optionen verhält er sich wie bisher.
+> - `MediaFileOutputNode`: Muster-Felder `{node}`, `{index}`, `{ext}`, `{kind}`, `{stem}`, `{timestamp}`. Bestehende Dateien werden standardmäßig nie überschrieben. Der Node gibt zusätzlich `{path, mime, size}` auf `out` aus, damit die geschriebene Datei weiterverdrahtet werden kann.
+> - Web-/API-Eingang: neben JSON jetzt auch `multipart/form-data` (Formularfelder landen in `meta.form`), rohe `image/*`-, `audio/*`-, `video/*`- und `application/octet-stream`-Bodies sowie normale urlencoded-Formulare. Obergrenze per `max_upload_mb` bzw. `PSF_MAX_UPLOAD_MB` (100), darüber HTTP 413. Neue Abhängigkeit `python-multipart`.
+> - Web-/API-Ausgang: `<path>/media` bzw. `/api/<uri>/media` liefern das neueste Medium mit echtem Content-Type und Range-Support aus, ein abgelaufener Blob ergibt 410. Ohne SSE liefern auch `<path>` bzw. `/api/<uri>/raw` ein Medium direkt aus. Die JSON-Wege tragen Zusammenfassungen, keine Bytes.
+> - Base64: `data_url: true` beim Encode. Beim Decode wird aus einer Data-URL ein `MediaItem`, `output: auto|text|bytes|media` erzwingt den Ergebnistyp. Normales Base64 verhält sich wie bisher.
+> - Palette: neue Kategorie „Media“ mit den beiden neuen Nodes (vorgezogen aus Phase 6).
+
 - **`MediaFileInputNode`**: Liest eine **ganze** Datei als ein `MediaItem` (nicht tailend) und schließt den MIME-Typ aus Endung und Magic Bytes. Gelesen wird in `to_thread`. Config: `path`, `emit_on: start|change`.
 - **`DirectoryInputNode`** erweitern: optionaler Filter `media_only`/`extensions` und Option `emit_as: path|media`.
 - **`MediaFileOutputNode`**: Schreibt eine Datei pro Item nach Pattern, z. B. `files/out/{node}_{index:05d}.{ext}`. `record_output()` enthält den Pfad plus eine Vorschau-Ref.

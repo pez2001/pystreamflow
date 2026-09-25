@@ -163,29 +163,23 @@ def register_route(method: str, path: str, name: str, endpoint) -> None:
     getattr(app, method)(path, name=name)(endpoint)
 
 def register_input(node_id: str, path: str, node):
-    # Ensure path starts with /
+    """Register ``POST <path>`` for an input node (WebInputNode,
+    ApiInputNode). A JSON object body is emitted as-is, exactly as before;
+    media plan phase 2 adds file uploads - ``multipart/form-data`` and raw
+    ``application/octet-stream``/``image/*``/``audio/*``/``video/*``
+    bodies - which are emitted as one ``MediaItem`` per file (see
+    ``core/media_http.py``). Uploads are limited to the node's
+    ``max_upload_mb`` config (default ``PSF_MAX_UPLOAD_MB``, 100)."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    from .media_http import BadRequest, UploadTooLarge, error_response, node_upload_limit, parse_request
+
     if not path.startswith("/"):
         path = "/" + path
 
-    # Create a closure to capture node
-    async def handler(payload: dict):
-        # Bug fix (found live, from a direct report): this used to call
-        # node.emit() unconditionally, with no regard for whether the
-        # node had been stopped. BaseNode.stop() only cancels the node's
-        # own process()/control-listener tasks - it was never plumbed
-        # into this HTTP route at all, because the route is registered
-        # once in init() and lives entirely independently of whatever
-        # task stop() cancels. The result: POST /nodes/{id}/stop on a
-        # WebInputNode/ApiInputNode looked like it worked (title bar
-        # turns grey, health reports "stopped") while the node kept
-        # silently accepting every request and forwarding it downstream
-        # exactly as before - stopping it changed nothing observable
-        # from the HTTP side at all. Checking `_running` here (defaulted
-        # True so this stays a no-op for anything that doesn't have the
-        # attribute, e.g. a plain test double) is what makes "stopped"
-        # actually mean "not accepting input" for this node type.
+    async def handler(request: Request):
         if not getattr(node, "_running", True):
-            from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=503,
                 content={
@@ -194,11 +188,22 @@ def register_input(node_id: str, path: str, node):
                     "error": "node is stopped and not accepting input",
                 },
             )
-        # record and forward
-        node.emit('out', payload)
+        try:
+            kind, value = await parse_request(request, node_upload_limit(node))
+        except (UploadTooLarge, BadRequest) as e:
+            return error_response(e)
+        if kind == "media":
+            for item in value:
+                node.emit('out', item)
+            return {"status": "ok", "node": node_id, "media": [item.summary() for item in value]}
+        if not isinstance(value, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "expected a JSON object body, or a file upload"},
+            )
+        node.emit('out', value)
         return {"status": "ok", "node": node_id}
 
-    # Use unique route name
     route_name = f"input_{node_id}"
     register_route("post", path, route_name, handler)
     return path
@@ -212,8 +217,10 @@ def node_last(node_id: str, n: int = 50):
     node = _nodes.get(node_id)
     if not node:
         return {"error": "node not found"}
+    from .media import to_jsonable
+
     last = node.get_last(n) if hasattr(node, "get_last") else []
-    return {"node": node_id, "last": last}
+    return to_jsonable({"node": node_id, "last": last})
 
 def http_endpoint_info(node) -> "dict | None":
     """Derived HTTP-reachability info for a node's config/reflection
@@ -278,6 +285,8 @@ def http_endpoint_info(node) -> "dict | None":
     }
     if hasattr(node, "raw_path"):
         info["raw_path"] = node.raw_path
+    if hasattr(node, "media_path"):
+        info["media_path"] = node.media_path
     if hasattr(node, "sse_enabled"):
         info["sse"] = node.sse_enabled
     return info

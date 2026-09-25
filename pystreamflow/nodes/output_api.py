@@ -1,8 +1,9 @@
 from ..core.node import BaseNode
 from ..core.stream import Pipe
+from ..core.media import MediaItem, to_jsonable
+from ..core.media_http import json_payload, latest_item, media_response, register_media_route
 from ..core.web_server import register_node, register_route, start_server
 import asyncio
-import json
 from fastapi.responses import StreamingResponse
 
 
@@ -87,23 +88,21 @@ class ApiOutputNode(BaseNode):
 
     def _register_routes(self):
         route_name = f"apiout_{self.id}"
+        # Media plan phase 2: the newest MediaItem is always served, with
+        # its real Content-Type, at /api/<uri>/media.
+        self.media_path = f"{self.path}/media"
+        register_media_route(self, self.media_path, f"apiout_media_{self.id}")
         raw_route_name = f"apiout_raw_{self.id}"
 
         if self.sse_enabled:
             async def json_stream_generator():
                 for item in self.get_last(20):
-                    try:
-                        payload = json.dumps(item)
-                    except Exception:
-                        payload = json.dumps({'data': str(item)})
+                    payload = json_payload(item)
                     yield f"data: {payload}\n\n"
                 while True:
                     try:
                         item = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                        try:
-                            payload = json.dumps(item)
-                        except Exception:
-                            payload = json.dumps({'data': str(item)})
+                        payload = json_payload(item)
                         yield f"data: {payload}\n\n"
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
@@ -133,11 +132,14 @@ class ApiOutputNode(BaseNode):
             async def json_handler():
                 last = self.get_last(1)
                 item = last[-1].get('item', last[-1]) if last and isinstance(last[-1], dict) else (last[-1] if last else None)
-                return JSONResponse(content={"latest": item})
+                return JSONResponse(content={"latest": to_jsonable(item)})
 
             register_route("get", self.path, route_name, json_handler)
 
             async def raw_handler():
+                latest = latest_item(self)
+                if isinstance(latest, MediaItem):
+                    return await media_response(latest)
                 last = self.get_last(1)
                 payload = self._raw_text(last[-1]) if last else ''
                 return PlainTextResponse(payload)

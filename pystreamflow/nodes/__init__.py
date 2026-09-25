@@ -1,5 +1,7 @@
 from .input_file import FileInputNode
 from .input_directory import DirectoryInputNode
+from .media_file_input import MediaFileInputNode
+from .media_file_output import MediaFileOutputNode
 from .input_web import WebInputNode
 from .input_api import ApiInputNode
 from .output_api import ApiOutputNode
@@ -96,6 +98,7 @@ __all__ = [
     "FileInputNode","DirectoryInputNode","WebInputNode","ApiInputNode","ApiOutputNode","LMStudioNode",
     "StackNode","FIFOQueueNode","LIFOQueueNode","ClockNode",
     "HTMLScraperNode",
+    "MediaFileInputNode","MediaFileOutputNode",
     "Base64DecodeNode",
     "Base64EncodeNode",
     "UserPromptNode",

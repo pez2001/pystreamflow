@@ -53,6 +53,8 @@ _OVERRIDES: dict[str, tuple[object, object]] = {
     # --- Pure sources: nothing reads self.inputs at all. ---
     "ConstantValueNode": ([], DEFAULT_OUTPUT_PORTS),
     "FileInputNode": ([], DEFAULT_OUTPUT_PORTS),
+    # Media plan phase 2: reads one whole file per item, pure source.
+    "MediaFileInputNode": ([], DEFAULT_OUTPUT_PORTS),
     # DirectoryInputNode: a pure source like FileInputNode, but with two
     # distinct, fixed output ports instead of one - discovered files and
     # discovered subdirectories are kept on separate ports (`files`/

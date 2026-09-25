@@ -158,10 +158,13 @@ async def test_web_output_json_node_non_serializable_item_falls_back():
     n = WebOutputJSONNode('n7', {'path': path, 'sse': True})
     await n.start()
     try:
-        # A set() isn't JSON-serializable - json.dumps() on it raises, so
-        # the generator's except-branch wraps it as {'data': str(item)}
-        # instead of crashing the stream.
-        await n.in_pipe.put({1, 2, 3})
+        # A plain object() isn't JSON-serializable - json.dumps() on it
+        # raises, so the generator's except-branch wraps it as
+        # {'data': str(item)} instead of crashing the stream. (A set used
+        # to be the example here; since media plan phase 2 the payload
+        # goes through core/media.py's to_jsonable() first, which turns a
+        # set into a JSON array instead.)
+        await n.in_pipe.put(object())
         await asyncio.sleep(0.1)
         chunk = await _first_sse_chunk(path)
         assert '"data"' in chunk

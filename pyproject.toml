@@ -18,6 +18,9 @@ dependencies = [
     # docstring for why). Requires >=2.0 for MCPServer (mcp<2's
     # equivalent, FastMCP, was renamed in the SDK's 2.x release).
     "mcp>=2.0",
+    # multipart/form-data file uploads to WebInputNode/ApiInputNode
+    # (media plan phase 2; core/media_http.py).
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

@@ -128,6 +128,20 @@ FIELD_OVERRIDES["TriggerToggleNode"].update({
 del FIELD_OVERRIDES["TriggerToggleNode"]["action"]
 
 
+# Media plan phase 2 - verified against media_file_input.py,
+# input_directory.py and base64_decode_node.py (each validates these
+# values in init()).
+FIELD_OVERRIDES["MediaFileInputNode"] = {
+    "emit_on": {"kind": "enum", "options": ["change", "start"]},
+}
+FIELD_OVERRIDES["DirectoryInputNode"] = {
+    "emit_as": {"kind": "enum", "options": ["path", "media"]},
+}
+FIELD_OVERRIDES["Base64DecodeNode"] = {
+    "output": {"kind": "enum", "options": ["auto", "text", "bytes", "media"]},
+}
+
+
 def get_field_schema(type_name: str) -> dict[str, dict]:
     """Field-level overrides for one node type, global ones first so a
     type-specific override (none currently collide, but future ones

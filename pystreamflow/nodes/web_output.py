@@ -1,5 +1,7 @@
 from ..core.node import BaseNode
 from ..core.stream import Pipe
+from ..core.media import MediaItem
+from ..core.media_http import latest_item, media_response, register_media_route
 from ..core.web_server import register_node, register_route
 import asyncio
 import json
@@ -39,6 +41,10 @@ class WebOutputNode(BaseNode):
         if not self.path.startswith('/'):
             self.path = '/' + self.path
         route_name = f"webout_{self.id}"
+        # Media plan phase 2: the newest MediaItem this node received is
+        # always served, with its real Content-Type, at <path>/media.
+        self.media_path = self.path.rstrip('/') + '/media'
+        register_media_route(self, self.media_path, f"webout_media_{self.id}")
 
         if self.sse_enabled:
             async def stream_generator():
@@ -66,6 +72,11 @@ class WebOutputNode(BaseNode):
             from fastapi.responses import PlainTextResponse
 
             async def handler():
+                # A MediaItem is served as itself (an image shows up as an
+                # image in the browser), anything else as plain text.
+                latest = latest_item(self)
+                if isinstance(latest, MediaItem):
+                    return await media_response(latest)
                 # Return latest item as plain text
                 last = self.get_last(1)
                 if last:

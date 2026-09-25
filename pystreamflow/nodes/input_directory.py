@@ -2,7 +2,9 @@ import asyncio
 import os
 from pathlib import Path
 
+from ..core.media import is_media_filename
 from ..core.node import BaseNode
+from .media_file_input import load_media_file
 
 
 class DirectoryInputNode(BaseNode):
@@ -25,6 +27,15 @@ class DirectoryInputNode(BaseNode):
         (via ``os.walk``), emitting every file/directory found anywhere
         under the tree.
       poll_interval: float seconds between scans, default ``2.0``.
+      extensions: optional file-extension filter for ``files``, as a list
+        or comma-separated string (``"jpg, png"`` or ``[".jpg", ".png"]``;
+        case-insensitive). Empty means every file.
+      media_only: bool, default ``False``. Only emit files whose extension
+        names an image, audio or video format (media plan phase 2).
+      emit_as: ``path`` (default) emits each new file's path as a string,
+        exactly as before; ``media`` emits the whole file as a
+        ``MediaItem`` (read in a worker thread), so a folder of images can
+        feed image nodes directly. ``dirs`` always carries paths.
 
     Both ``path`` and ``recursive`` are re-read from ``self.path``/
     ``self.recursive`` on every scan pass rather than captured once before
@@ -46,6 +57,29 @@ class DirectoryInputNode(BaseNode):
         self.path = self.config.get('path')
         self.recursive = bool(self.config.get('recursive', False))
         self.poll_interval = float(self.config.get('poll_interval', 2.0))
+        self.extensions = self.config.get('extensions') or []
+        self.media_only = bool(self.config.get('media_only', False))
+        self.emit_as = str(self.config.get('emit_as', 'path')).lower()
+        if self.emit_as not in ('path', 'media'):
+            raise ValueError(f"DirectoryInputNode: emit_as must be 'path' or 'media', not {self.emit_as!r}")
+
+    def _extension_set(self) -> set[str]:
+        exts = self.extensions
+        if isinstance(exts, str):
+            exts = exts.split(',')
+        out = set()
+        for e in exts or []:
+            e = str(e).strip().lower()
+            if e:
+                out.add(e if e.startswith('.') else '.' + e)
+        return out
+
+    def _wanted(self, path: str, exts: set[str]) -> bool:
+        if exts and os.path.splitext(path)[1].lower() not in exts:
+            return False
+        if self.media_only and not is_media_filename(path):
+            return False
+        return True
 
     async def process(self):
         seen_files: set[str] = set()
@@ -83,13 +117,26 @@ class DirectoryInputNode(BaseNode):
                 await asyncio.sleep(self.poll_interval)
                 continue
 
+            exts = self._extension_set()
+            files = [f for f in files if self._wanted(f, exts)]
             new_files = [f for f in files if f not in seen_files]
             new_dirs = [d for d in dirs if d not in seen_dirs]
             seen_files.update(new_files)
             seen_dirs.update(new_dirs)
 
             for f in new_files:
-                self.emit('files', f)
+                if self.emit_as == 'media':
+                    try:
+                        item = await asyncio.to_thread(load_media_file, f)
+                    except OSError as e:
+                        # e.g. deleted between the scan and the read - try
+                        # again on the next pass
+                        seen_files.discard(f)
+                        self._last_error = f'cannot read {f}: {e.strerror or e}'
+                        continue
+                    await self.emit_wait('files', item)
+                else:
+                    self.emit('files', f)
             for d in new_dirs:
                 self.emit('dirs', d)
 
