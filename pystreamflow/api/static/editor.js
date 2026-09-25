@@ -127,9 +127,11 @@
       Promise.all([
         fetchJSON('/node-schema').catch(() => null),
         fetchJSON('/config-schema').catch(() => null),
-      ]).then(([ps, cs]) => {
+        fetchJSON('/node-availability').catch(() => null),
+      ]).then(([ps, cs, av]) => {
         if (ps) portSchema = ps;
         if (cs) configSchema = cs;
+        if (av && av.unavailable) { unavailableTypes = av.unavailable; buildPalette(); }
         toast(ps && cs ? 'API key saved.' : 'API key saved, but the node schema still failed to load - check the key and reload.');
       });
     };
@@ -265,6 +267,15 @@
     HttpPost: { type: 'HttpPostNode', label: 'HTTP Post', icon: '📤' },
     MediaFileInput: { type: 'MediaFileInputNode', label: 'Media File Input', icon: '🖼️' },
     MediaFileOutput: { type: 'MediaFileOutputNode', label: 'Media File Output', icon: '🗂️' },
+    ImageDecode: { type: 'ImageDecodeNode', label: 'Image Decode', icon: '🖼️' },
+    ImageResize: { type: 'ImageResizeNode', label: 'Image Resize', icon: '↔️' },
+    ImageCrop: { type: 'ImageCropNode', label: 'Image Crop', icon: '✂️' },
+    ImageRotate: { type: 'ImageRotateNode', label: 'Image Rotate', icon: '🔄' },
+    ImageFlip: { type: 'ImageFlipNode', label: 'Image Flip', icon: '🪞' },
+    ImageConvert: { type: 'ImageConvertNode', label: 'Image Convert', icon: '🔁' },
+    ImageFilter: { type: 'ImageFilterNode', label: 'Image Filter', icon: '🎚️' },
+    ImageInfo: { type: 'ImageInfoNode', label: 'Image Info', icon: 'ℹ️' },
+    ImageThumbnail: { type: 'ImageThumbnailNode', label: 'Image Thumbnail', icon: '🔳' },
   };
   const nodeDocs = {
     WebInputNode: { desc: 'HTTP input via shared web server: a JSON object body is emitted as-is, a file upload (multipart/form-data, or a raw image/audio/video/octet-stream body) as one media item per file', url: '/docs/nodes/index.md#webinputnode' },
@@ -275,7 +286,16 @@
     MediaFileInputNode: { desc: 'Reads one image/audio/video file as a whole and emits it as a media item (emit_on: change = on start and whenever the file changes, start = once)', url: '/docs/nodes/index.md#media-nodes' },
     MediaFileOutputNode: { desc: 'Writes each item to its own file (path_pattern with {node} {index:05d} {ext} {kind} {stem} {timestamp}; default "<files_dir>/media/{node}_{index:05d}.{ext}") and emits {path, mime, size}', url: '/docs/nodes/index.md#media-nodes' },
     JSONInputNode: { desc: 'Reads newline-delimited JSON from a real source (source: "stdin", the default, or a file path to tail) and emits each parsed value', url: '/docs/nodes/index.md' },
-    LMStudioNode: { desc: 'LM Studio OpenAI compatible LLM', url: '/docs/nodes/index.md' },
+    LMStudioNode: { desc: 'LM Studio OpenAI compatible LLM. Images on `in` are sent to vision models; the question comes from the `prompt` input port or image_prompt', url: '/docs/nodes/index.md' },
+    ImageDecodeNode: { desc: 'Checks an item is a decodable image and fills in width/height/mode/format (auto_orient: rotate photos upright by EXIF)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageResizeNode: { desc: 'Scale to max_side, or width/height (fit inside with keep_aspect); resample nearest|bilinear|bicubic|lanczos; never enlarges unless upscale', url: '/docs/nodes/index.md#image-nodes' },
+    ImageCropNode: { desc: 'Cut out width x height at x/y, or centered (center: true)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageRotateNode: { desc: 'Rotate by angle degrees counter-clockwise (exif = upright by EXIF tag)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageFlipNode: { desc: 'Mirror horizontally, vertically or both', url: '/docs/nodes/index.md#image-nodes' },
+    ImageConvertNode: { desc: 'Re-encode as png/jpeg/webp/gif/bmp/tiff with quality; mode RGB/RGBA/L', url: '/docs/nodes/index.md#image-nodes' },
+    ImageFilterNode: { desc: 'Blur, sharpen, edges, ... plus brightness/contrast/saturation/sharpness factors', url: '/docs/nodes/index.md#image-nodes' },
+    ImageInfoNode: { desc: 'Emits a dict with size, dimensions, mode, format, alpha and EXIF - for logic/compare/JSON nodes', url: '/docs/nodes/index.md#image-nodes' },
+    ImageThumbnailNode: { desc: 'Small preview (max_side, default 256) as WebP/JPEG/PNG', url: '/docs/nodes/index.md#image-nodes' },
     ScriptInputNode: { desc: 'Periodic script execution input', url: '/docs/nodes/index.md#scriptinput' },
     FileOutputNode: { desc: 'Really appends each item to a real file on disk (path, default "<files_dir>/output.txt" - PSF_FILES_DIR, /app/files under docker-compose.yml)', url: '/docs/nodes/index.md' },
     LogOutputNode: { desc: 'Logs each item via Python logging AND to a real log file (file, default "<logs_dir>/pystreamflow.log" - PSF_LOGS_DIR, /app/logs under docker-compose.yml)', url: '/docs/nodes/index.md' },
@@ -346,7 +366,7 @@
     Text: ['TextUpper', 'TextLower', 'TextTrim', 'TextReplace', 'TextSubstring', 'TextReverse', 'TextTitle', 'TextStrip', 'TextSplit', 'TextJoin'],
     'Line/Token': ['LineSplitter', 'Tokenizer', 'LineBuffer', 'TrimString', 'ListStrings', 'Table'],
     Control: ['Timer', 'Trigger', 'TimerTrigger', 'TriggerOn', 'TriggerOff', 'TriggerPause', 'TriggerIf', 'TriggerThreshold', 'TriggerDebounce', 'TriggerPulse', 'TriggerToggle', 'Cron'],
-    Media: ['MediaFileInput', 'MediaFileOutput'],
+    Media: ['MediaFileInput', 'MediaFileOutput', 'ImageDecode', 'ImageResize', 'ImageCrop', 'ImageRotate', 'ImageFlip', 'ImageConvert', 'ImageFilter', 'ImageInfo', 'ImageThumbnail'],
     Advanced: ['Subgraph', 'Stack', 'FIFOQueue', 'LIFOQueue', 'Clock', 'HTMLScraper', 'Base64Decode', 'Base64Encode', 'UserPrompt', 'RollingWindowBuffer', 'SyncBarrier', 'QueueGate'],
   };
 
@@ -431,6 +451,9 @@
   // Global editor state
   // ------------------------------------------------------------------
   let portSchema = {};
+  // Node types this server can't run (optional dependency missing, e.g.
+  // Pillow for the image nodes) -> install hint; see GET /node-availability.
+  let unavailableTypes = {};
   let configSchema = {};
   let nodeTemplates = {};
   try { nodeTemplates = JSON.parse(localStorage.getItem('psf_node_templates') || '{}'); } catch (e) { nodeTemplates = {}; }
@@ -1350,7 +1373,16 @@
     DirectoryInputNode: { path: '', recursive: false, poll_interval: 2.0, extensions: '', media_only: false, emit_as: 'path' },
     MediaFileInputNode: { path: '', emit_on: 'change', poll_interval: 1.0 },
     MediaFileOutputNode: { path_pattern: '', overwrite: false },
-    LMStudioNode: { base_url: 'http://localhost:1234/v1', model: 'local-model', api_key: 'lm-studio', system: '', timeout: 600 },
+    LMStudioNode: { base_url: 'http://localhost:1234/v1', model: 'local-model', api_key: 'lm-studio', system: '', timeout: 600, image_prompt: 'Describe this image.' },
+    ImageDecodeNode: { auto_orient: false },
+    ImageResizeNode: { max_side: 1024, width: '', height: '', keep_aspect: true, resample: 'lanczos', upscale: false },
+    ImageCropNode: { width: 512, height: 512, x: 0, y: 0, center: false },
+    ImageRotateNode: { angle: 90, expand: true, fill: '#000000' },
+    ImageFlipNode: { direction: 'horizontal' },
+    ImageConvertNode: { format: 'jpeg', quality: 85, mode: 'keep' },
+    ImageFilterNode: { filter: 'none', radius: 2, brightness: 1.0, contrast: 1.0, saturation: 1.0, sharpness: 1.0 },
+    ImageInfoNode: { exif: true },
+    ImageThumbnailNode: { max_side: 256, format: 'webp', quality: 80 },
     ScriptInputNode: { script_path: '', interpreter: '', args: [], interval: 5.0, working_dir: '', timeout: 30.0, emit_mode: 'lines' },
     MQTTInputNode: { broker: 'localhost', port: 1883, topic: '#', client_id: '', username: '', password: '', qos: 0 },
     ConstantValueNode: { value: '', repeat: false, interval: 1.0 },
@@ -2123,6 +2155,12 @@
     const key = nodeTypes[psfTypeOrKey] ? psfTypeOrKey : keyForType(psfTypeOrKey);
     if (!key) return null;
     const meta = nodeTypes[key];
+    // Media plan phase 3: the search box and pasted/duplicated nodes come
+    // through here too, not just the (greyed-out) palette button.
+    if (unavailableTypes[meta.type] && opts.syncBackend !== false) {
+      toast(`${meta.label}: ${unavailableTypes[meta.type]}`);
+      return null;
+    }
     // Bug fix (found while investigating why nodes rendered with no
     // config widgets at all - the concrete complaint behind "the MQTT
     // nodes need input fields to directly set host/user/pw/topic"):
@@ -3350,6 +3388,16 @@
         const doc = nodeDocs[meta.type] || {};
         b.textContent = `${meta.icon} ${meta.label}`;
         b.title = doc.desc ? `${doc.desc}` : meta.label;
+        const missing = unavailableTypes[meta.type];
+        if (missing) {
+          // Media plan phase 3: greyed out, with the install hint, rather
+          // than creating a node the backend can't instantiate.
+          b.classList.add('unavailable');
+          b.title = `Not available on this server - ${missing}`;
+          b.onclick = () => toast(`${meta.label}: ${missing}`);
+          palette.appendChild(b);
+          return;
+        }
         b.onclick = () => { createPsfNode(k); graphcanvas.setDirty(true, true); };
         palette.appendChild(b);
       });
@@ -3407,12 +3455,14 @@
   async function init() {
     themeLiteGraph();
     try {
-      const [ps, cs] = await Promise.all([
+      const [ps, cs, av] = await Promise.all([
         fetchJSON('/node-schema').catch(() => ({})),
         fetchJSON('/config-schema').catch(() => ({})),
+        fetchJSON('/node-availability').catch(() => ({})),
       ]);
       portSchema = ps || {};
       configSchema = cs || {};
+      unavailableTypes = (av && av.unavailable) || {};
     } catch (e) { /* fall back to defaults baked into rebuildPorts */ }
 
     buildNodeClasses();

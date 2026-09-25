@@ -92,6 +92,15 @@ Dazu kommt ein Helfer `sniff_mime(bytes)` über Magic Bytes für PNG, JPEG, GIF,
 
 ### Phase 3: Bilder (Extra `[image]`: Pillow, optional numpy)
 
+> **Status: umgesetzt.** Code in `core/media_transform.py` (Basis `MediaTransformNode`) und `nodes/image_nodes.py`, Vision in `nodes/llm_lmstudio.py`, Tests in `tests/test_media_phase3.py`, Doku im Abschnitt „Image Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Pillow ist optional (`pip install 'pystreamflow[image]'`, auch in `[media]` und `[dev]`). Fehlt es, werden die Bild-Nodes nicht registriert. `GET /node-availability` meldet sie mit Installationshinweis, der Editor graut sie aus (auch im Suchfeld gesperrt), und `Engine.validate()` lehnt Workflows mit ihnen ab, statt still einen No-op-Node einzusetzen. Das ist ein vorgezogener Teil von Phase 6.
+> - `ImageDecodeNode` legt kein Pillow-Objekt in `meta`. Das wäre nicht JSON-fähig und würde bei jedem Fan-out mitkopiert. Stattdessen prüft der Node das Bild, trägt `width`/`height`/`mode`/`format` ein und korrigiert den MIME-Typ. Optional richtet er Fotos per EXIF auf (`auto_orient`). Jeder Bild-Node dekodiert selbst, was bei Bildgrößen im Megabyte-Bereich vertretbar ist.
+> - Alle Nodes arbeiten auf `image` und `video_frame`, laufen in einem Worker-Thread und reichen alles andere unverändert durch. Bei kaputten Bildern geben sie das Original weiter und zählen den Fehler am Node.
+> - `ImageFilterNode` bietet zusätzlich Sättigung und Schärfe; `ImageRotateNode` kann `angle: exif`.
+> - `ImageThumbnailNode` wird noch nicht intern für die Live-View genutzt; die Vorschau zeigt weiterhin das Originalbild. `ImageComposeNode` bleibt wie geplant für später.
+> - LM-Studio-Vision: neuer Eingang `prompt` und Config `image_prompt`. Bilder gehen als `image_url` mit Data-URL raus, mehrere Bilder in einer Liste oder einem Dict sind möglich.
+> - Das Docker-Image enthält Pillow noch nicht (kommt mit Phase 7); dort sind die Bild-Nodes bis dahin ausgegraut.
+
 | Node | Funktion |
 |---|---|
 | `ImageDecodeNode` | Wandelt ein `MediaItem` in ein Pillow-Bild in `meta` und prüft das Format |

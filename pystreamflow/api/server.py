@@ -344,6 +344,15 @@ def node_schema():
     from ..core.port_schema import all_port_schemas
     return all_port_schemas()
 
+@app.get("/node-availability")
+def node_availability():
+    """Node types the editor knows about but this installation can't run,
+    because an optional dependency is missing (media plan phase 3: the
+    image nodes need Pillow) - {"unavailable": {type: hint}}. The editor
+    greys these out in its palette."""
+    from ..nodes import UNAVAILABLE_NODE_TYPES
+    return {"unavailable": dict(UNAVAILABLE_NODE_TYPES)}
+
 @app.get("/config-schema")
 def config_schema():
     """Per-node-type config-field overrides (core/config_schema.py).

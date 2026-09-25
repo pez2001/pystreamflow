@@ -24,7 +24,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Media plan phase 3: image nodes (pystreamflow/nodes/image_nodes.py).
+# Without it those node types are simply not registered.
+image = ["Pillow>=10.0"]
+media = ["Pillow>=10.0"]
 dev = [
+    "Pillow>=10.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",

@@ -194,7 +194,9 @@ _OVERRIDES: dict[str, tuple[object, object]] = {
     # string on failure) and 'stats' (token usage + latency, when the
     # server reports it). See nodes/llm_lmstudio.py's process() for
     # exactly when each one fires.
-    "LMStudioNode": (DEFAULT_INPUT_PORTS, ["out", "prompt", "reasoning", "results", "errors", "stats"]),
+    # 'prompt' input: optional question text for images arriving on 'in'
+    # (media plan phase 3 - see LMStudioNode's docstring).
+    "LMStudioNode": (["in", "prompt"], ["out", "prompt", "reasoning", "results", "errors", "stats"]),
     # HttpPostNode: feature request - "add a node to post data to
     # external webservers". Fixed, distinct ports mirroring LMStudioNode's
     # own split above: 'out' (everything, one item either way), 'request'

@@ -1,11 +1,28 @@
+from ..core.media import MediaItem
 from ..core.node import BaseNode
 from ..core.stream import Pipe
 from ..core.web_server import register_node
 import asyncio
+import base64
 import httpx
 import time
 
 class LMStudioNode(BaseNode):
+    """Chat completion against an OpenAI-compatible server (LM Studio,
+    llama.cpp, vLLM, ...).
+
+    Vision (media plan phase 3): an image ``MediaItem`` arriving on ``in``
+    - alone, as a list, or as a dict like ``{"image": item, "prompt":
+    "..."}`` - is sent as an ``image_url`` content part with a
+    ``data:<mime>;base64,...`` URL, the format vision models on these
+    servers accept. The accompanying text is, in order: the dict's
+    ``prompt``/``text`` value, the latest value that arrived on the
+    ``prompt`` input port, or the ``image_prompt`` config (default
+    "Describe this image."). The model has to support images; a text-only
+    model will answer with an error from the server. Shrink large images
+    first (ImageResizeNode) - every pixel costs tokens.
+    """
+
     async def init(self):
         # Bug fix found while auditing the ad-hoc "POST /nodes then POST
         # /nodes/connect" node-creation path (api/server.py's create_node
@@ -51,10 +68,66 @@ class LMStudioNode(BaseNode):
         # at a short 10s, so a genuinely unreachable/down server still
         # fails fast instead of hanging for the full timeout too.
         self.timeout = float(self.config.get('timeout', 600.0))
+        self.image_prompt = self.config.get('image_prompt') or 'Describe this image.'
+        self._latest_prompt = None
         register_node(self)
+
+    async def _prompt_listener(self):
+        """Keeps the latest text from the optional ``prompt`` input port,
+        used as the question for the next image."""
+        while self._running:
+            pipe = self.inputs.get('prompt')
+            if pipe is None:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                value = await asyncio.wait_for(pipe.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            if isinstance(value, dict) and 'value' in value:
+                value = value['value']
+            self._latest_prompt = None if value is None else str(value)
+
+    @staticmethod
+    def _images_in(prompt) -> list:
+        if isinstance(prompt, MediaItem):
+            candidates = [prompt]
+        elif isinstance(prompt, (list, tuple)):
+            candidates = list(prompt)
+        elif isinstance(prompt, dict):
+            candidates = []
+            for value in prompt.values():
+                candidates.extend(value if isinstance(value, (list, tuple)) else [value])
+        else:
+            return []
+        return [c for c in candidates if isinstance(c, MediaItem) and c.kind in ('image', 'video_frame')]
+
+    async def _user_content(self, prompt):
+        """The user message's ``content``: a plain string for text, or a
+        list of text + image_url parts when the item carries images."""
+        images = self._images_in(prompt)
+        if not images:
+            return prompt if isinstance(prompt, str) else str(prompt)
+        text = None
+        if isinstance(prompt, dict):
+            text = prompt.get('prompt') or prompt.get('text')
+        text = text or self._latest_prompt or self.image_prompt
+        parts = [{"type": "text", "text": str(text)}]
+        for image in images:
+            data = await image.aget_bytes()
+            url = f"data:{image.mime};base64,{base64.b64encode(data).decode('ascii')}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        return parts
 
     async def process(self):
         client_timeout = httpx.Timeout(10.0, read=self.timeout)
+        prompt_task = asyncio.create_task(self._prompt_listener())
+        try:
+            await self._serve(client_timeout)
+        finally:
+            prompt_task.cancel()
+
+    async def _serve(self, client_timeout):
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             while self._running:
                 # Re-resolved every iteration rather than captured once -
@@ -68,10 +141,14 @@ class LMStudioNode(BaseNode):
                 messages = []
                 if self.system:
                     messages.append({"role": "system", "content": self.system})
-                if isinstance(prompt, str):
-                    messages.append({"role": "user", "content": prompt})
-                else:
-                    messages.append({"role": "user", "content": str(prompt)})
+                try:
+                    content = await self._user_content(prompt)
+                except KeyError:
+                    # the image's blob expired before it could be sent
+                    self.emit('errors', 'image payload expired before it could be sent')
+                    self.emit('out', {"prompt": prompt, "error": "image payload expired"})
+                    continue
+                messages.append({"role": "user", "content": content})
 
                 # Feature request: separate named outputs instead of one
                 # 'out' port carrying either a {'prompt','completion'} or a

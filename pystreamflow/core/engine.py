@@ -192,6 +192,14 @@ class Engine:
         # Check all nodes referenced in edges exist
         node_ids = {n.id for n in self.graph.nodes}
         node_types = {n.id: n.type for n in self.graph.nodes}
+        # A known node type whose optional dependency isn't installed
+        # (media plan phase 3 - e.g. the image nodes without Pillow) must
+        # fail loudly here, not fall back to _instantiate_nodes()' silent
+        # no-op node.
+        from ..nodes import UNAVAILABLE_NODE_TYPES
+        for n in self.graph.nodes:
+            if n.type in UNAVAILABLE_NODE_TYPES:
+                raise ValueError(f"Node {n.id}: {n.type} is not available - {UNAVAILABLE_NODE_TYPES[n.type]}")
         for e in self.graph.edges:
             if e.source not in node_ids:
                 raise ValueError(f"Edge source {e.source} not found")

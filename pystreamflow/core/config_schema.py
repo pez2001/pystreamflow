@@ -142,6 +142,29 @@ FIELD_OVERRIDES["Base64DecodeNode"] = {
 }
 
 
+# Media plan phase 3 - verified against nodes/image_nodes.py (each value
+# is validated in that node's configure()).
+FIELD_OVERRIDES["ImageResizeNode"] = {
+    "resample": {"kind": "enum", "options": ["lanczos", "bicubic", "bilinear", "nearest"]},
+}
+FIELD_OVERRIDES["ImageFlipNode"] = {
+    "direction": {"kind": "enum", "options": ["horizontal", "vertical", "both"]},
+}
+FIELD_OVERRIDES["ImageConvertNode"] = {
+    "format": {"kind": "enum", "options": ["keep", "png", "jpeg", "webp", "gif", "bmp", "tiff"]},
+    "mode": {"kind": "enum", "options": ["keep", "RGB", "RGBA", "L"]},
+}
+FIELD_OVERRIDES["ImageFilterNode"] = {
+    "filter": {"kind": "enum", "options": [
+        "none", "blur", "gaussian_blur", "box_blur", "sharpen", "unsharp_mask",
+        "edges", "edge_enhance", "contour", "emboss", "smooth", "detail",
+    ]},
+}
+FIELD_OVERRIDES["ImageThumbnailNode"] = {
+    "format": {"kind": "enum", "options": ["webp", "jpeg", "png"]},
+}
+
+
 def get_field_schema(type_name: str) -> dict[str, dict]:
     """Field-level overrides for one node type, global ones first so a
     type-specific override (none currently collide, but future ones

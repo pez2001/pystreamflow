@@ -121,3 +121,23 @@ __all__ = [
     "ListStringsNode","DisplayNode","TableNode",
     "ConstantValueNode",
 ]
+
+# Node types whose optional dependency (media plan phase 3: the
+# `pystreamflow[image]` extra, i.e. Pillow) isn't installed. They are not
+# in __all__ - so not in the registry and not creatable - and
+# GET /node-availability reports them with an install hint so the editor
+# can grey them out instead of offering nodes that can't run.
+IMAGE_NODE_TYPES = (
+    "ImageDecodeNode", "ImageResizeNode", "ImageCropNode", "ImageRotateNode", "ImageFlipNode",
+    "ImageConvertNode", "ImageFilterNode", "ImageInfoNode", "ImageThumbnailNode",
+)
+UNAVAILABLE_NODE_TYPES: dict[str, str] = {}
+try:
+    from . import image_nodes as _image_nodes
+except ImportError as _e:  # Pillow missing
+    for _name in IMAGE_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = f"needs Pillow: pip install 'pystreamflow[image]' ({_e})"
+else:
+    for _name in IMAGE_NODE_TYPES:
+        globals()[_name] = getattr(_image_nodes, _name)
+    __all__ += list(IMAGE_NODE_TYPES)

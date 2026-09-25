@@ -45,6 +45,20 @@ Images, audio and video travel through a graph as **media items** (`MediaItem`):
 - **Serving media out of a graph**: WebOutputNode serves the newest media item at `<path>/media` (and at `<path>` itself when `sse` is off). ApiOutputNode serves it at `/api/<uri>/media` (and at `/api/<uri>/raw` when `sse` is off), with the item's own Content-Type and `Range` support for audio/video seeking. The JSON routes carry a summary instead of the bytes.
 - **Base64**: Base64EncodeNode encodes a media item's payload; `data_url: true` produces `data:<mime>;base64,...` (for LLM vision APIs, HTML, MQTT). Base64DecodeNode turns such a data URL back into a media item (`output: auto`); `output: text|bytes|media` forces the result type.
 
+## Image Nodes
+Need Pillow: `pip install 'pystreamflow[image]'`. Without it these node types are not registered; the editor greys them out with that hint, and a workflow using them is rejected with the same message. They work on media items of kind `image` and `video_frame`, pass anything else through unchanged, and on a corrupt image pass the original through while recording the error on the node. A transformed image keeps its source format when that is PNG, JPEG or WebP (anything else becomes PNG) and keeps the item's `meta`, with `width`/`height` updated.
+
+- **ImageDecodeNode** – Checks that the item is a decodable image and fills in `width`, `height`, `mode` and `format`; corrects a wrong MIME type. The bytes stay untouched unless `auto_orient: true` rotates an EXIF-rotated photo upright.
+- **ImageResizeNode** – `max_side` (longer side), or `width`/`height` (with both: fit inside when `keep_aspect`, the default, else stretch; with one: the other follows). `resample`: `lanczos` (default), `bicubic`, `bilinear`, `nearest`. Never enlarges unless `upscale: true`.
+- **ImageCropNode** – `width` × `height` at `x`/`y`, or centered with `center: true`; clamped to the image.
+- **ImageRotateNode** – `angle` degrees counter-clockwise (default 90; multiples of 90 are lossless), `expand` (default `true`), `fill` colour for new corners; `angle: exif` rotates upright by the EXIF tag.
+- **ImageFlipNode** – `direction`: `horizontal` (default), `vertical`, `both`.
+- **ImageConvertNode** – `format`: `keep`, `png`, `jpeg`, `webp`, `gif`, `bmp`, `tiff`; `quality` 1–100 (JPEG/WebP, default 85); `mode`: `keep`, `RGB`, `RGBA`, `L` (WebP stores grayscale as RGB). Transparency is flattened onto white where the target can't keep it.
+- **ImageFilterNode** – `filter`: `none`, `blur`, `gaussian_blur`, `box_blur`, `sharpen`, `unsharp_mask`, `edges`, `edge_enhance`, `contour`, `emboss`, `smooth`, `detail` (`radius` for the blur/unsharp ones, default 2); plus `brightness`, `contrast`, `saturation`, `sharpness` factors (1.0 = unchanged).
+- **ImageInfoNode** – Emits a plain dict instead of the image: `mime`, `kind`, `size`, `width`, `height`, `mode`, `format`, `frames`, `has_alpha`, `meta` and `exif` (tag name → value; `exif: false` to omit) – for logic, compare, template and JSON nodes.
+- **ImageThumbnailNode** – Fits into `max_side` × `max_side` (default 256) and encodes compactly: `format` `webp` (default), `jpeg` or `png`, `quality` (default 80).
+- **Vision with LMStudioNode** – An image on its `in` port (alone, as a list, or as `{"image": ..., "prompt": "..."}`) is sent to a vision model as an `image_url` data URL. The question is the dict's `prompt`, else the latest value on the node's `prompt` input port, else its `image_prompt` config ("Describe this image."). Resize first – large images cost many tokens.
+
 ## Output Nodes
 - **FileOutputNode** – Appends items to a file.
 - **LogOutputNode** – Logs items to console / file.
