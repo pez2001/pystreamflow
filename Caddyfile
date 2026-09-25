@@ -1,0 +1,26 @@
+# PyStreamFlow reverse proxy - terminates HTTPS so the editor UI, the main
+# HTTP API, and /mcp/* (LM Studio, Claude Desktop, or any other MCP client)
+# are all reachable over a real TLS connection instead of plain HTTP.
+#
+# `mcp.lan` (replace with whatever hostname you actually use - see
+# docker-compose.yml's own comment) isn't a publicly-registered domain, so
+# Caddy can't get a Let's Encrypt certificate for it and automatically falls
+# back to its own internal CA instead - this "just works" with zero config
+# here, but every client that connects (a browser, LM Studio, curl) will see
+# an untrusted-certificate warning until that CA is trusted. See
+# docs/user_guide.md's "HTTPS via Caddy" section for how to extract and
+# install it - a one-time step per client device, not something to redo on
+# every restart (the `caddy_data` volume below is what makes the same CA/
+# certs survive a restart instead of being regenerated).
+#
+# flush_interval -1 forces Caddy to flush every write to the client
+# immediately instead of buffering - not optional here: /mcp/sse (the
+# legacy SSE transport) and /mcp's own streamable-HTTP transport are both
+# real long-lived streams, and buffering them would reintroduce the exact
+# kind of "client connects but nothing ever arrives" symptom this project
+# already spent a lot of effort chasing down at the application layer.
+mcp.lan {
+	reverse_proxy pystreamflow:8000 {
+		flush_interval -1
+	}
+}

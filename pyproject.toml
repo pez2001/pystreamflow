@@ -1,0 +1,66 @@
+[project]
+name = "pystreamflow"
+version = "1.0.0"
+description = "Python node graph editor for stream flow routing"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.24",
+    "httpx>=0.24",
+    "prometheus-client>=0.19",
+    "typer>=0.9",
+    "paho-mqtt>=1.6",
+    # The real Model Context Protocol SDK (mcp/server.py is now built on
+    # this, not a hand-rolled approximation - see that module's own
+    # docstring for why). Requires >=2.0 for MCPServer (mcp<2's
+    # equivalent, FastMCP, was renamed in the SDK's 2.x release).
+    "mcp>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+pystreamflow = "pystreamflow.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pystreamflow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["pystreamflow"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Phase 5 of the project's evaluation/action plan raised real coverage
+# from 52% to 90.54% (see claude/evaluation_and_action_plan.md); the gate
+# is raised to 85 rather than pinned at the current figure so it still
+# fails a real regression but leaves headroom for legitimate small dips
+# (e.g. adding a new, not-yet-fully-tested node type) without every such
+# PR needing a gate bump in the same commit.
+fail_under = 85
+
+[tool.coverage.html]
+directory = "coverage_html_report"

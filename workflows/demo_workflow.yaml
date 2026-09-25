@@ -1,0 +1,111 @@
+nodes:
+  - id: web_in
+    type: WebInputNode
+    label: Web Input
+    config:
+      path: /demo/in
+      host: 0.0.0.0
+      port: 8080
+  - id: trim
+    type: TextTrimNode
+    label: Trim
+    config: {}
+  - id: upper
+    type: TextUpperNode
+    label: Uppercase
+    config: {}
+  - id: replace
+    type: TextReplaceNode
+    label: Replace
+    config:
+      find: HELLO
+      replace: HI
+  - id: split
+    type: TextSplitNode
+    label: Split
+    config:
+      sep: " "
+  - id: join
+    type: TextJoinNode
+    label: Join
+    config:
+      sep: "-"
+  - id: num_add
+    type: NumericAddNode
+    label: Add 10
+    config:
+      value: 10
+  - id: num_clamp
+    type: NumericClampNode
+    label: Clamp 0-100
+    config:
+      min: 0
+      max: 100
+  - id: and_gate
+    type: AndNode
+    label: AND
+    config: {}
+  - id: xor_gate
+    type: XorNode
+    label: XOR
+    config: {}
+  - id: encode
+    type: EncodingConvertNode
+    label: Encoding
+    config:
+      input_encoding: utf-8
+      output_encoding: utf-8
+      decode_to_text: true
+  - id: llm
+    type: LMStudioNode
+    label: LM Studio
+    config:
+      base_url: http://localhost:1234/v1
+      model: local-model
+      system: You are a helpful assistant.
+  - id: log_out
+    type: LogOutputNode
+    label: Log Output
+    config: {}
+
+edges:
+  - source: web_in
+    target: trim
+    source_port: out
+    target_port: in
+  - source: trim
+    target: upper
+    source_port: out
+    target_port: in
+  - source: upper
+    target: replace
+    source_port: out
+    target_port: in
+  - source: replace
+    target: split
+    source_port: out
+    target_port: in
+  - source: split
+    target: join
+    source_port: out
+    target_port: in
+  - source: join
+    target: log_out
+    source_port: out
+    target_port: in
+  - source: web_in
+    target: llm
+    source_port: out
+    target_port: in
+  - source: llm
+    target: log_out
+    source_port: out
+    target_port: in
+  - source: web_in
+    target: encode
+    source_port: out
+    target_port: in
+  - source: encode
+    target: log_out
+    source_port: out
+    target_port: in

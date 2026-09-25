@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data this app writes (PSF_FILES_DIR/PSF_LOGS_DIR defaults, and
+# anything a session/daemon run leaves behind under the repo root)
+data/
+logs/
+*.log
+
+# Env files that may hold real secrets (PSF_API_KEY, PSF_MCP_API_KEY, ...)
+.env
+.env.*
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Desktop-app-managed output folder, not part of the source tree
+Claude outputs/

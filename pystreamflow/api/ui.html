@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>PyStreamFlow Editor</title>
+<link rel="stylesheet" href="/static/vendor/litegraph.css">
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+header{padding:8px 12px;background:#111827;border-bottom:1px solid #334155;display:flex;align-items:center;gap:8px;flex-wrap:wrap;z-index:20;position:relative;flex:none}
+header h1{font-size:15px;margin:0 12px 0 0;font-weight:600;white-space:nowrap}
+header .grp{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+header .sep{width:1px;height:22px;background:#334155;margin:0 4px}
+button{padding:6px 10px;background:#3b82f6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap}
+button:hover{filter:brightness(1.1)}
+button.secondary{background:#334155}
+button.ghost{background:transparent;border:1px solid #334155;color:#94a3b8}
+label.toggle{display:flex;align-items:center;gap:4px;font-size:12px;color:#94a3b8;white-space:nowrap}
+/* Layout is a flex column (header, optional subgraph breadcrumb bar,
+   main) with `main` taking whatever height remains - not header's old
+   fixed `calc(100vh - 46px)`, which assumed a single fixed-height header
+   and would have left a stale, wrong-sized gap (or a clipped/overflowing
+   canvas) whenever #subgraphBar toggles visible/hidden below it. */
+main{display:grid;grid-template-columns:auto 1fr auto;flex:1;min-height:0}
+aside{background:#111827;overflow:auto;transition:width .15s,padding .15s;position:relative}
+aside.collapsed{width:0!important;padding:0!important;overflow:hidden;border:none!important}
+#paletteAside{width:230px;padding:10px;border-right:1px solid #1e293b}
+#paletteAside h4{margin:14px 0 4px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+#paletteAside h4:first-child{margin-top:0}
+#paletteAside button{display:block;width:100%;text-align:left;margin:2px 0;background:#1e293b;color:#e2e8f0}
+#paletteAside button:hover{background:#334155}
+#tools{list-style:none;padding:0;margin:6px 0 0;font-size:12px;color:#94a3b8}
+#detailsAside{width:300px;padding:10px;border-left:1px solid #1e293b}
+#detailsAside h4{margin:0 0 4px}
+#detailsAside pre{background:#000;color:#4ade80;padding:8px;border-radius:6px;font-size:11px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.muted{color:#94a3b8;font-size:12px}
+#canvasWrap{position:relative;overflow:hidden;background:#0d1526}
+#graphCanvas{width:100%;height:100%;display:block}
+#minimap{position:absolute;right:12px;bottom:12px;width:180px;height:130px;background:#0f172a;border:1px solid #334155;border-radius:6px;cursor:crosshair;opacity:.92}
+.collapse-toggle{position:absolute;top:8px;z-index:15;background:#1e293b;border:1px solid #334155;color:#94a3b8;width:22px;height:22px;border-radius:4px;padding:0;font-size:11px}
+#paletteAside ~ #canvasWrap{}
+#toast{position:absolute;left:50%;bottom:20px;transform:translate(-50%,20px);background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:8px 14px;border-radius:6px;font-size:12px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#modalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:100}
+#modalOverlay.open{display:flex}
+.modal{background:#1e293b;border:1px solid #334155;border-radius:8px;width:min(520px,90vw);max-height:80vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.modal-title{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #334155;font-weight:600;font-size:13px}
+.modal-close{background:transparent;color:#94a3b8;font-size:16px;padding:0 4px}
+.modal-body{padding:12px 14px}
+.modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:10px}
+textarea#advJson{width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;font-family:monospace;font-size:12px;padding:8px}
+.modal.wide{width:min(720px,92vw)}
+.session-row{border:1px solid #334155;border-radius:6px;padding:8px 10px;margin-bottom:8px}
+.session-row-main{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.session-row-main strong{font-size:12px;word-break:break-all}
+.session-status{font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:10px;background:#334155;color:#94a3b8;white-space:nowrap}
+.session-status.running{background:#14532d;color:#4ade80}
+.session-status.paused{background:#78350f;color:#fbbf24}
+.session-status.error{background:#7f1d1d;color:#fca5a5}
+.session-status.stopped,.session-status.created{background:#334155;color:#94a3b8}
+.session-row-meta{font-size:11px;color:#64748b;margin-top:4px}
+.session-row-actions{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.session-row-actions button{padding:4px 8px;font-size:11px}
+</style>
+</head>
+<body>
+<header>
+<button class="ghost" id="btnTogglePalette" title="Toggle palette">☰</button>
+<h1>PyStreamFlow · Node Editor</h1>
+<div class="grp">
+  <button id="btnRun" title="Run: builds/saves the current graph and starts a session (or resumes if paused)">▶ Run</button>
+  <button class="secondary" id="btnStop">⏹ Stop</button>
+  <button class="secondary" id="btnPause">⏸ Pause</button>
+  <button class="secondary" id="btnStep">⏭ Step</button>
+</div>
+<div class="sep"></div>
+<div class="grp">
+  <button class="secondary" id="btnZoomIn">+</button>
+  <button class="secondary" id="btnZoomOut">−</button>
+  <button class="secondary" id="btnFit">Fit</button>
+</div>
+<div class="sep"></div>
+<div class="grp">
+  <button class="secondary" id="btnExport">Export YAML</button>
+  <input type="file" id="importFile" accept=".yaml,.yml" style="display:none">
+  <button class="secondary" id="btnImportTrigger">Import</button>
+  <button class="secondary" id="btnDemo">Load Demo</button>
+  <button class="secondary" id="btnLoadSession">Load Session</button>
+</div>
+<div class="sep"></div>
+<div class="grp">
+  <button class="secondary" id="triggerModeBtn" title="Override: force the NEXT wire you drag to be a control edge, even from a non-Trigger node's output. Dragging from a Trigger-family node's output is already always a control edge without needing this.">Trigger Wiring: Off</button>
+  <button class="secondary" id="endpointModeBtn" title="Override: force the NEXT wire you drag to be an 'endpoint' edge instead of 'data' (both wire identically at runtime - this is a labeling/organizational distinction only).">Endpoint Wiring: Off</button>
+  <button class="secondary" id="btnClearWires">Clear All Wires</button>
+</div>
+<div class="sep"></div>
+<div class="grp">
+  <button class="secondary" id="btnGroupSubgraph" title="Collapse the selected nodes (drag a box, or Ctrl/Shift-click, to multi-select) into a single new SubgraphNode. Any wire crossing the selection's boundary becomes one of the new subgraph's own external input/output ports; double-click or right-click a SubgraphNode afterward for Open/Ungroup.">📦 Group → Subgraph</button>
+</div>
+<div class="grp" style="margin-left:auto">
+  <span class="muted">Double-click canvas or right-click → Add Node to search &amp; add nodes</span>
+  <button class="ghost" id="btnToggleDetails" title="Toggle details panel">☰</button>
+</div>
+</header>
+<div id="subgraphBar" style="display:none;align-items:center;gap:8px;padding:6px 12px;background:#1e293b;border-bottom:1px solid #334155;font-size:12px;color:#94a3b8">
+  <span>📂 Editing subgraph: <strong id="subgraphBarLabel" style="color:#e2e8f0"></strong></span>
+  <span style="margin-left:auto"></span>
+  <button id="btnSubgraphSave" title="Save this subgraph's contents back to its workflow file and return to the parent graph">💾 Save &amp; Close</button>
+  <button class="secondary" id="btnSubgraphDiscard" title="Return to the parent graph without saving any changes made in this subgraph">✖ Discard &amp; Close</button>
+</div>
+<main>
+<aside id="paletteAside">
+  <div id="palette"></div>
+  <h4>MCP Tools</h4>
+  <ul id="tools"></ul>
+</aside>
+<div id="canvasWrap">
+  <canvas id="graphCanvas"></canvas>
+  <canvas id="minimap" width="180" height="130"></canvas>
+</div>
+<aside id="detailsAside">
+  <div id="details"></div>
+</aside>
+</main>
+<div id="toast"></div>
+<div id="modalOverlay"></div>
+<script src="/static/vendor/litegraph.core.min.js"></script>
+<script src="/static/editor.js"></script>
+</body>
+</html>

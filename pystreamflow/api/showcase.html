@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>PyStreamFlow Showcase</title>
+<style>
+body{font-family:system-ui;background:#0f172a;color:#fff;margin:0}
+header{padding:20px;background:#1e293b;text-align:center}
+section{padding:20px;max-width:1000px;margin:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{background:#1e293b;padding:16px;border-radius:8px}
+code{background:#0f172a;padding:2px 6px;border-radius:4px}
+pre{background:#000;color:#0f0;padding:12px;border-radius:6px;overflow:auto}
+a{color:#3b82f6}
+</style>
+</head>
+<body>
+<header>
+<h1>PyStreamFlow Showcase</h1>
+<p>Production-ready stream flow node graph editor</p>
+</header>
+<section>
+<h2>Live Demo</h2>
+<p>Open the editor: <a href="/ui" target="_blank">/ui</a></p>
+<p>Import <code>demo_workflow.yaml</code> to see a complete pipeline with Web Input, Text, Numeric, Boolean, Encoding, LLM and Log Output nodes.</p>
+<div class="grid">
+<div class="card"><h3>Web Input</h3><p>POST to <code>/in/{id}</code> on port 8080. Multiple instances supported.</p></div>
+<div class="card"><h3>Text Nodes</h3><p>Upper, Lower, Trim, Replace, Substring, Reverse, Title, Strip, Split, Join</p></div>
+<div class="card"><h3>Numeric Nodes</h3><p>Add, Sub, Mul, Div, Mod, Pow, Min, Max, Clamp, Round, Abs</p></div>
+<div class="card"><h3>Boolean Logic</h3><p>And, Or, Not, Xor, Nand, Nor, Xnor</p></div>
+<div class="card"><h3>Encoding</h3><p>EncodingConvertNode for charset conversion</p></div>
+<div class="card"><h3>LLM</h3><p>LM Studio connection node with OpenAI compatible API</p></div>
+<div class="card"><h3>Live View</h3><p><code>/nodes/{id}/last</code> shows last items passed through</p></div>
+<div class="card"><h3>MCP Server</h3><p>AI interaction at <code>/mcp/tools</code> and <code>/mcp/call</code></p></div>
+</div>
+</section>
+<section>
+<h2>Quick Start</h2>
+<pre>docker compose up -d
+# API http://localhost:8000
+# UI http://localhost:8000/ui
+# Web inputs http://localhost:8080
+# MCP http://localhost:9000/mcp/tools</pre>
+<h3>CLI Pipe Demo</h3>
+<pre>echo '{"msg":"hello"}' | pystreamflow pipe web_in</pre>
+<h3>Tail Demo</h3>
+<pre>pystreamflow tail log_out</pre>
+</section>
+<section>
+<h2>Workflow Example</h2>
+<pre id="wf"></pre>
+<script>
+fetch('/workflows/demo_workflow.yaml').then(r=>r.text()).then(t=>{document.getElementById('wf').textContent=t}).catch(()=>{document.getElementById('wf').textContent='Load demo_workflow.yaml into the editor'});
+</script>
+</section>
+</body>
+</html>

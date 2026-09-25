@@ -1,0 +1,16 @@
+nodes:
+  - id: gen
+    type: GeneratorInputNode
+    config:
+      interval: 1.0
+      value: hello
+  - id: log
+    type: LogOutputNode
+    config:
+      prefix: [LOG]
+
+edges:
+  - source: gen
+    target: log
+    source_port: out
+    target_port: in

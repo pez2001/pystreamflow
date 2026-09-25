@@ -1,0 +1,48 @@
+nodes:
+  - id: web_in
+    type: WebInputNode
+    config:
+      # Bug fix: this was pinned to 127.0.0.1, unreachable through the
+      # Docker-published port (see WebInputNode.init()'s own comment) -
+      # meaning "Load Demo", the one path most new users try first,
+      # silently didn't work at all in the packaged Docker deployment.
+      # Left explicit here (rather than just deleting the line, which
+      # would also work now that this is the node's own default) so the
+      # demo doubles as a visible example of the config field to use.
+      host: 0.0.0.0
+      port: 8080
+      path: /in
+  # Fork + API Output added so "Load Demo" actually shows the raw-output
+  # edge points (the "⇢ raw0"/"⇢ raw1"/... ports on Fork, "⇢ raw" on API
+  # Output) on the one path most people use to see a working example -
+  # the previous demo workflow only had WebInputNode/LMStudioNode, so
+  # anyone testing raw ports via Load Demo (rather than dragging Fork/API
+  # Output from the palette by hand) would never have seen them at all,
+  # whatever the port code itself did.
+  - id: fork
+    type: ForkNode
+    config: {}
+  - id: llm
+    type: LMStudioNode
+    config:
+      base_url: http://localhost:1234/v1
+      model: local-model
+      system: You are a helpful assistant.
+  - id: api_out
+    type: ApiOutputNode
+    config:
+      uri: demo_out
+
+edges:
+  - source: web_in
+    target: fork
+    source_port: out
+    target_port: in
+  - source: fork
+    target: llm
+    source_port: out0
+    target_port: in
+  - source: fork
+    target: api_out
+    source_port: out1
+    target_port: in

@@ -1,0 +1,116 @@
+version: '3.9'
+
+services:
+  pystreamflow:
+    build: .
+    container_name: pystreamflow
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ./workflows:/app/workflows
+      - ./logs:/app/logs
+      - ./files:/app/files
+      - ./data:/app/data
+    environment:
+      - PSF_DEBUG=false
+      - PSF_HOST=0.0.0.0
+      - PSF_PORT=8000
+      # Bug fix (reported: "mcp still not working" - a real MCP client got
+      # 403 Forbidden on every request, even after "using the access
+      # token"). This used to be `PSF_MCP_API_KEY=changeme` - a live,
+      # non-empty default rather than being left unset. Every other
+      # mention of this variable, in this project's own code and docs
+      # (pystreamflow/mcp/server.py's module docstring, docs/ai_guide.md's
+      # Authentication section), describes it as *opt-in*: unset means
+      # "no MCP auth required at all". Shipping a real, active value here
+      # by default silently broke that promise for anyone using this
+      # compose file (almost everyone) - the server actually required the
+      # literal string "changeme" as the key, but nothing told the
+      # operator that, so the natural thing to do - copy the *main*
+      # PSF_API_KEY (the one this project DOES auto-generate and log
+      # clearly, see PSF_API_KEY below / core/auth.py) into the MCP
+      # client's access-token field - sent a value that could never match
+      # "changeme", and every /mcp/* request came back 403.
+      #
+      # Left unset here now, matching the documented default: MCP
+      # endpoints are open, no token needed anywhere. If you want MCP
+      # auth, uncomment the line below, pick your own real value (not
+      # "changeme"), restart this container (`docker compose up -d
+      # --build`), and put that *exact* value into your MCP client's
+      # Authorization/access-token field - the running server also now
+      # logs whatever value it's actually enforcing at startup
+      # (`docker compose logs pystreamflow | grep PSF_MCP_API_KEY`), so
+      # you can always double-check the two sides actually match.
+      # - PSF_MCP_API_KEY=your-own-real-key-here
+      #
+      # Separately: if you connect an MCP client (LM Studio, etc.) via a
+      # real LAN hostname (e.g. mcp.lan) rather than localhost/127.0.0.1,
+      # you may see "421 Misdirected Request" instead of a normal
+      # response - that's the mcp SDK's own DNS-rebinding-protection
+      # Host-header check, which is disabled by default here (this app
+      # already has its own key-based auth above). It only comes back if
+      # you explicitly opt back into it:
+      # - PSF_MCP_ALLOWED_HOSTS=mcp.lan:8000,localhost:8000
+      #
+      # PSF_API_KEY (the *separate* main key for the HTTP API/editor UI/
+      # sessions) is also left unset on purpose: unlike PSF_MCP_API_KEY,
+      # that one is never optional - if you don't set it, the server
+      # generates a random one on first startup and saves it to
+      # ./data/api_key.txt (also printed in `docker compose logs
+      # pystreamflow` on first run) so you can retrieve and use it. Set
+      # PSF_API_KEY=... here instead if you'd rather choose that value
+      # yourself.
+      # Default paths FileOutputNode/LogOutputNode/ProcessInputNode/
+      # ShellInputNode/ProcessOutputNode fall back to when a workflow
+      # doesn't set its own path/cwd - matching the volumes above, so a
+      # bare "file output" or "shell input" node reads/writes somewhere
+      # you can actually see on the host by default, without every
+      # workflow needing to hardcode an absolute container path.
+      - PSF_LOGS_DIR=/app/logs
+      - PSF_FILES_DIR=/app/files
+      - PSF_DATA_DIR=/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # HTTPS reverse proxy in front of the pystreamflow service above - added
+  # so the editor UI, the main API, and /mcp/* are all reachable over a real
+  # TLS connection (https://mcp.lan) instead of only plain HTTP. See the
+  # Caddyfile in this same directory for the actual proxy config/comments,
+  # and docs/user_guide.md's "HTTPS via Caddy" section for the one-time
+  # per-client step of trusting Caddy's own internal CA (mcp.lan isn't a
+  # publicly-registered domain, so Caddy can't get a Let's Encrypt cert for
+  # it and automatically falls back to a self-signed one from its own
+  # internal CA instead - that's expected, not a misconfiguration).
+  #
+  # This is additive: `pystreamflow` above still also listens on 8000/8080/
+  # 9000 directly, so nothing that already points at http://mcp.lan:8000
+  # breaks while you switch clients (LM Studio included) over to
+  # https://mcp.lan. Once everything's moved over, you can remove the
+  # "8000:8000" line above so port 8000 is only reachable through Caddy.
+  caddy:
+    image: caddy:2-alpine
+    container_name: pystreamflow-caddy
+    restart: unless-stopped
+    depends_on:
+      - pystreamflow
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy's own internal CA/cert/key material lives here - persisting it
+      # is what makes the same CA (and therefore the same trust you set up
+      # on a client device) survive a container restart, instead of Caddy
+      # silently minting a brand new untrusted CA every time it restarts.
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

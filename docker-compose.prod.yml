@@ -1,0 +1,80 @@
+version: '3.9'
+
+services:
+  pystreamflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pystreamflow-prod
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ./workflows:/app/workflows
+      - ./logs:/app/logs
+      - ./files:/app/files
+      - ./data:/app/data
+    environment:
+      - PSF_DEBUG=false
+      - PSF_HOST=0.0.0.0
+      - PSF_PORT=8000
+      - PSF_LOG_LEVEL=info
+      # Bug fix: this was a live "changeme" placeholder rather than being
+      # unset - see docker-compose.yml's own comment for the full story
+      # (it silently broke this variable's documented opt-in default and
+      # caused real 403s for a user copying the *other*, main API key
+      # into their MCP client instead). Left unset here too for the same
+      # reason, but for an actual production deployment you should set a
+      # real value below rather than leaving MCP wide open - just make
+      # sure whatever you pick here is the *exact* value your MCP
+      # client(s) send too (the server logs what it's enforcing at
+      # startup: `docker compose -f docker-compose.prod.yml logs
+      # pystreamflow | grep PSF_MCP_API_KEY`).
+      # - PSF_MCP_API_KEY=your-own-real-key-here
+      # See docker-compose.yml for what these three control.
+      - PSF_LOGS_DIR=/app/logs
+      - PSF_FILES_DIR=/app/files
+      - PSF_DATA_DIR=/app/data
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Same HTTPS reverse proxy as docker-compose.yml - see that file's own
+  # comment and the Caddyfile for the full explanation. If this production
+  # deployment is reachable at a real, publicly-registered domain (rather
+  # than a LAN-only name like mcp.lan), point the Caddyfile's site block at
+  # that domain instead - Caddy will then automatically get you a real,
+  # publicly-trusted Let's Encrypt certificate instead of falling back to
+  # its own internal CA, and no client will need to trust anything extra.
+  caddy:
+    image: caddy:2-alpine
+    container_name: pystreamflow-caddy-prod
+    restart: always
+    depends_on:
+      - pystreamflow
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Named distinctly from docker-compose.yml's own caddy_data/
+      # caddy_config (rather than reusing those names) so the two compose
+      # files' volumes can't collide if this directory's default Compose
+      # project name is ever used for both - matching the same -prod
+      # distinction container_name already uses above.
+      - caddy_data_prod:/data
+      - caddy_config_prod:/config
+
+volumes:
+  caddy_data_prod:
+  caddy_config_prod:

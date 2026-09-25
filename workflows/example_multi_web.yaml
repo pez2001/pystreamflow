@@ -1,0 +1,28 @@
+nodes:
+  - id: web_api
+    type: WebInputNode
+    config:
+      host: 0.0.0.0
+      port: 8080
+      path: /api/in
+  - id: web_metrics
+    type: WebInputNode
+    config:
+      host: 0.0.0.0
+      port: 8080
+      path: /metrics/in
+  - id: llm
+    type: LMStudioNode
+    config:
+      base_url: http://localhost:1234/v1
+      model: local-model
+
+edges:
+  - source: web_api
+    target: llm
+    source_port: out
+    target_port: in
+  - source: web_metrics
+    target: llm
+    source_port: out
+    target_port: in

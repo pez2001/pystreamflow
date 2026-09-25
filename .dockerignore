@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+.git
+.vscode
+logs
+*.md
+!README.md
