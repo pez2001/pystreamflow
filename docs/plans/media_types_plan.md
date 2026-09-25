@@ -171,6 +171,14 @@ Weil Frames auch Bilder sind, lassen sich alle Bild-Nodes aus Phase 3 direkt auf
 
 ### Phase 6: Editor und UI
 
+> **Status 6b (Port-Datentypen): umgesetzt** in `core/port_schema.py`, `api/server.py`, `mcp/server.py`, `core/engine.py`, `api/static/editor.js` und `api/ui.html`; Tests in `tests/test_media_phase6b.py`.
+> - dtypes `any`, `text`, `number`, `json`, `image`, `audio`, `video`, `media`, deklariert in `_PORT_DTYPES` nur dort, wo der Typ eindeutig ist (alle Medien-Nodes, Text- und Zahlen-Familie, einige JSON- und LLM-Ausgänge). Alles andere ist `any`. Videoframes gelten als `image`.
+> - Anders als im Plan skizziert steckt der dtype nicht in `get_port_schema()`/`/node-schema`, sondern in `get_port_dtypes()` und dem neuen Endpoint `GET /port-dtypes`. Grund: das bestehende Schema-Format wird von Tests und vom Editor exakt ausgewertet und bleibt so unverändert.
+> - `validate_edge()` bleibt unverändert und blockiert nichts Neues. Die neue Funktion `edge_warning()` liefert nur Hinweise: `POST /nodes/connect` und das MCP-Tool `connect_nodes` geben `warning` zurück, `POST /workflows` gibt `warnings` zurück, und `Engine.validate()` loggt sie.
+> - Regeln: `any` und gleiche Typen passen; `media` passt zu jeder Medienart; alles außer Medien passt in `text`; `number` passt in `json`. Gewarnt wird bei Medien ↔ Nicht-Medien, bei verschiedenen Medienarten und bei Text/JSON in `number`.
+> - Editor: Die Port-Punkte werden nach dtype eingefärbt (Farben so gewählt, dass sie sich von den Farben für Attribut- und Control-Slots abheben). Ein unpassender Datendraht wird rot gezeichnet (auch beim Laden eines Workflows) und löst einen Hinweis aus, wird aber verbunden. Im leeren Detailbereich zeigt eine Legende die Farben.
+> - Offen aus Phase 6: Vorschau direkt auf der Node-Kachel.
+
 > **Status 6a (Live-View-Vorschau): umgesetzt** in `api/static/editor.js` und `api/ui.html`.
 > - Seitenpanel: Über dem JSON erscheint das neueste Medium der Node-History als `<img>`, `<audio controls>` oder `<video controls>`, andere Typen als Download-Link. Die Beschriftung zeigt Art, MIME-Typ, Maße, Dauer, pts und Größe. Ein Medium mit derselben Ref wird nicht neu gerendert, damit laufendes Audio oder Video beim 1-s-Poll nicht neu startet.
 > - „Letztes Frame“-Modus: `video_frame` und `audio_chunk` werden mit dem normalen 1-s-Poll aktualisiert und lassen sich per „⏸ Pause“ einfrieren. MJPEG ist nicht umgesetzt, der Poll reicht für die Vorschau.

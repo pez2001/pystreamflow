@@ -773,7 +773,10 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
             _attribute_pump_tasks[key] = asyncio.create_task(_pump_attribute(pipe, tgt, target_port))
         else:
             tgt.add_input(target_port, pipe)
-        return {"result": {"status": "connected"}}
+        # Port-dtype mismatch (media plan phase 6b): connected anyway, reported.
+        from ..core.port_schema import edge_warning
+        warning = edge_warning(type(src).__name__, source_port, type(tgt).__name__, target_port, edge_type)
+        return {"result": {"status": "connected", **({"warning": warning} if warning else {})}}
 
     if tool == "disconnect_nodes":
         # Mirrors connect_nodes() above and api/server.py's

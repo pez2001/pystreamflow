@@ -344,6 +344,16 @@ def node_schema():
     from ..core.port_schema import all_port_schemas
     return all_port_schemas()
 
+@app.get("/port-dtypes")
+def port_dtypes():
+    """Per-node-type port data types (media plan phase 6b,
+    core/port_schema.py): {"dtypes": [...], "types": {type: {"inputs":
+    {port: dtype}, "outputs": {port: dtype}}}}. Ports not listed are
+    "any". Kept separate from /node-schema so that endpoint's shape stays
+    exactly as it was."""
+    from ..core.port_schema import DTYPES, all_port_dtypes
+    return {"dtypes": list(DTYPES), "types": all_port_dtypes()}
+
 @app.get("/node-availability")
 def node_availability():
     """Node types the editor knows about but this installation can't run,
@@ -631,7 +641,7 @@ from ..core.engine import _attribute_pump_tasks, _cancel_attribute_pump, _edge_p
 @app.post("/nodes/connect")
 async def connect_nodes(req: ConnectReq):
     from ..core.engine import edge_pipe, validate_buffer
-    from ..core.port_schema import validate_edge
+    from ..core.port_schema import edge_warning, validate_edge
     src = _nodes.get(req.source_id)
     tgt = _nodes.get(req.target_id)
     if not src or not tgt:
@@ -694,7 +704,9 @@ async def connect_nodes(req: ConnectReq):
         _attribute_pump_tasks[key] = asyncio.create_task(_pump_attribute(pipe, tgt, req.target_port))
     else:
         tgt.add_input(req.target_port, pipe)
-    return {"status": "connected"}
+    # Port-dtype mismatch (media plan phase 6b): connected anyway, reported.
+    warning = edge_warning(type(src).__name__, req.source_port, type(tgt).__name__, req.target_port, req.type)
+    return {"status": "connected", "warning": warning} if warning else {"status": "connected"}
 
 @app.delete("/nodes/connect")
 async def disconnect_nodes(req: ConnectReq):
@@ -807,8 +819,9 @@ class WorkflowModel(BaseModel):
 
 @app.post("/workflows")
 def save_workflow_api(wf: WorkflowModel):
-    from ..core.port_schema import validate_edge
+    from ..core.port_schema import edge_warning, validate_edge
     graph = Graph()
+    warnings = []
     for n in wf.nodes:
         graph.add_node(Node(**n))
     node_types = {n.id: n.type for n in graph.nodes}
@@ -826,11 +839,18 @@ def save_workflow_api(wf: WorkflowModel):
         err = validate_edge(src_type, edge.source_port, tgt_type, edge.target_port, edge.type)
         if err:
             return {"error": f"invalid edge {edge.source}->{edge.target}: {err}"}
+        # Port-dtype mismatch (media plan phase 6b): saved anyway, reported.
+        warning = edge_warning(src_type, edge.source_port, tgt_type, edge.target_port, edge.type)
+        if warning:
+            warnings.append(warning)
         graph.add_edge(edge)
     import uuid
     fname = f"/tmp/workflow_{uuid.uuid4().hex}.yaml"
     save_workflow(graph, fname)
-    return {"status":"saved","path":fname}
+    result = {"status":"saved","path":fname}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @app.get("/workflows")
 def list_workflows():

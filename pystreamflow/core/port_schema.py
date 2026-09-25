@@ -383,3 +383,138 @@ def validate_edge(
         )
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Port data types (media plan phase 6b)
+# ---------------------------------------------------------------------------
+#
+# Optional, per port: what kind of value a port carries. Purely advisory -
+# a wire between mismatched ports is *allowed* (validate_edge() above is
+# unchanged) and only produces a warning via edge_warning() below, so
+# nothing that used to connect stops connecting. The editor colors ports
+# by dtype and marks mismatched wires.
+#
+# Deliberately declared only where the type is unambiguous; every port not
+# listed here is "any". JSON-consuming inputs stay "any" because those
+# nodes also accept (and parse) JSON strings.
+
+DTYPES = ("any", "text", "number", "json", "image", "audio", "video", "media")
+_MEDIA_DTYPES = {"image", "audio", "video", "media"}
+
+_TEXT_IN_OUT = ({"in": "text"}, {"out": "text"})
+_NUMBER_IN_OUT = ({"in": "number"}, {"out": "number"})
+_IMAGE_IN_OUT = ({"in": "image"}, {"out": "image"})
+_AUDIO_IN_OUT = ({"in": "audio"}, {"out": "audio"})
+
+# type name -> ({input port: dtype}, {output port: dtype})
+_PORT_DTYPES: dict[str, tuple[dict[str, str], dict[str, str]]] = {
+    **{t: _TEXT_IN_OUT for t in (
+        "TextUpperNode", "TextLowerNode", "TextTrimNode", "TextReplaceNode", "TextSubstringNode",
+        "TextReverseNode", "TextTitleNode", "TextStripNode", "TrimStringNode",
+    )},
+    "TextSplitNode": ({"in": "text"}, {"out": "json"}),
+    "TextJoinNode": ({}, {"out": "text"}),
+    **{t: _NUMBER_IN_OUT for t in (
+        "NumericAddNode", "NumericSubNode", "NumericMulNode", "NumericDivNode", "NumericModNode",
+        "NumericPowNode", "NumericMinNode", "NumericMaxNode", "NumericClampNode", "NumericRoundNode",
+        "NumericAbsNode",
+    )},
+    "JSONInputNode": ({}, {"out": "json"}),
+    "JSONModifyNode": ({}, {"out": "json"}),
+    "Base64EncodeNode": ({}, {"out": "text"}),
+    "Base64DecodeNode": ({"in": "text"}, {}),
+    "LMStudioNode": ({"prompt": "text"}, {
+        "out": "json", "reasoning": "text", "results": "text", "errors": "text", "stats": "json",
+    }),
+    "HttpPostNode": ({}, {"out": "json", "errors": "text", "stats": "json"}),
+    # media plan phase 2
+    "MediaFileInputNode": ({}, {"out": "media"}),
+    "MediaFileOutputNode": ({}, {"out": "json"}),
+    "DirectoryInputNode": ({}, {"dirs": "text"}),
+    # phase 3
+    **{t: _IMAGE_IN_OUT for t in (
+        "ImageDecodeNode", "ImageResizeNode", "ImageCropNode", "ImageRotateNode", "ImageFlipNode",
+        "ImageConvertNode", "ImageFilterNode", "ImageThumbnailNode",
+    )},
+    "ImageInfoNode": ({"in": "image"}, {"out": "json"}),
+    # phase 4
+    "AudioDecodeNode": ({"in": "media"}, {"out": "audio"}),
+    "AudioEncodeNode": ({"in": "audio"}, {"out": "audio"}),
+    **{t: _AUDIO_IN_OUT for t in ("AudioResampleNode", "AudioGainNode", "AudioNormalizeNode", "AudioSegmentNode")},
+    "AudioLevelNode": ({"in": "audio"}, {"out": "json", "rms_db": "number", "peak_db": "number"}),
+    "SpeechToTextNode": ({"in": "media"}, {"out": "text", "details": "json", "errors": "text"}),
+    # phase 5 (frames are images)
+    "VideoDecodeNode": ({"in": "video"}, {"out": "image", "audio": "audio"}),
+    "VideoFrameSampleNode": _IMAGE_IN_OUT,
+    "VideoEncodeNode": ({"in": "image", "audio": "audio"}, {"out": "video"}),
+    "VideoInfoNode": ({"in": "video"}, {"out": "json"}),
+    "VideoThumbnailNode": ({"in": "video"}, {"out": "image"}),
+}
+
+
+def get_port_dtypes(type_name: str) -> dict[str, dict[str, str]]:
+    """``{"inputs": {port: dtype}, "outputs": {port: dtype}}`` - only the
+    ports that have a dtype other than "any"."""
+    ins, outs = _PORT_DTYPES.get(type_name, ({}, {}))
+    return {"inputs": dict(ins), "outputs": dict(outs)}
+
+
+def all_port_dtypes() -> dict[str, dict[str, dict[str, str]]]:
+    """Port dtypes for every registered node type that declares any."""
+    from .registry import build_node_registry
+
+    return {name: get_port_dtypes(name) for name in build_node_registry() if name in _PORT_DTYPES}
+
+
+def port_dtype(type_name: str, port: str, direction: str) -> str:
+    """dtype of one port; ``direction`` is "inputs" or "outputs"."""
+    return get_port_dtypes(type_name)[direction].get(port, "any")
+
+
+def dtype_warning(source_dtype: str, target_dtype: str) -> str | None:
+    """Why a value of ``source_dtype`` probably doesn't belong in a port of
+    ``target_dtype``, or ``None`` if the pair is fine.
+
+    Fine: either side "any"; equal dtypes; "media" with any single media
+    kind (both ways); anything into "text" except media (nodes turn it into
+    a string); "number" into "json". Everything else gets a warning - most
+    importantly media into non-media ports and one media kind into
+    another."""
+    s, t = source_dtype or "any", target_dtype or "any"
+    if "any" in (s, t) or s == t:
+        return None
+    s_media, t_media = s in _MEDIA_DTYPES, t in _MEDIA_DTYPES
+    if s_media and t_media:
+        if "media" in (s, t):
+            return None
+        return f"{s} output into {_a(t)} input - the target will pass it through or fail"
+    if s_media or t_media:
+        return f"{s} output into {_a(t)} input - one side expects media, the other plain values"
+    if t == "text" or (s == "number" and t == "json"):
+        return None
+    return f"{s} output into {_a(t)} input - the target may not be able to use it"
+
+
+def _a(word: str) -> str:
+    return ("an " if word[0] in "aeiou" else "a ") + word
+
+
+def edge_warning(
+    source_type: str,
+    source_port: str,
+    target_type: str,
+    target_port: str,
+    edge_type: str = "data",
+) -> str | None:
+    """dtype check for one edge (``validate_edge()``'s advisory sibling):
+    a warning string or ``None``. Only data-carrying edges are checked -
+    control and attribute edges don't deliver to a typed input port."""
+    if edge_type not in ("data", "raw", "endpoint"):
+        return None
+    warning = dtype_warning(
+        port_dtype(source_type, source_port, "outputs"), port_dtype(target_type, target_port, "inputs"),
+    )
+    if warning is None:
+        return None
+    return f"{source_type}.{source_port} -> {target_type}.{target_port}: {warning}"

@@ -4,6 +4,7 @@
 - Media foundation (phase 1 of `docs/plans/media_types_plan.md`): `MediaItem` data type with MIME sniffing, disk-backed blob store with TTL/size limit and background cleanup
 - Binary-safe node stats and live-view history; `manual_emit()` replays the real payload
 - JSON-safe live view, reflection and MCP results for binary items (no more HTTP 500), new `GET /media/{ref}` endpoint with `Range` support
+- Port data types (phase 6b): advisory `dtype` per port (`GET /port-dtypes`), mismatch warnings from `/nodes/connect`, `/workflows`, the MCP `connect_nodes` tool and `Engine.validate()`; the editor colors ports by type, draws mismatched wires red and shows a legend
 - Video nodes (phase 5, PyAV via `pystreamflow[video]` or the ffmpeg executable): Decode (files, uploads, RTSP/HTTP streams with reconnect; fps/size sampling; audio track), FrameSample, Encode (mp4 H.264/AAC, webm VP9/Opus; segments, flush, audio port), Info, Thumbnail
 - Fix: two edges between the same pair of nodes no longer share one pipe in `Engine._wire_edges()`
 - Audio nodes (phase 4, optional `pystreamflow[audio]` extra / numpy + soundfile, ffmpeg for AAC/M4A/Opus and video audio tracks): Decode (whole or chunked), Encode (wav/flac/ogg/mp3/m4a/opus), Resample, Gain, Normalize, Level, Segment (silence/time); SpeechToTextNode with an OpenAI-compatible API backend or local faster-whisper (`pystreamflow[stt]`)

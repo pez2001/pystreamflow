@@ -128,7 +128,9 @@
         fetchJSON('/node-schema').catch(() => null),
         fetchJSON('/config-schema').catch(() => null),
         fetchJSON('/node-availability').catch(() => null),
-      ]).then(([ps, cs, av]) => {
+        fetchJSON('/port-dtypes').catch(() => null),
+      ]).then(([ps, cs, av, pd]) => {
+        if (pd && pd.types) portDtypes = pd.types;
         if (ps) portSchema = ps;
         if (cs) configSchema = cs;
         if (av && av.unavailable) { unavailableTypes = av.unavailable; buildPalette(); }
@@ -440,6 +442,49 @@
   // (its own separate, untouched fan-out-multiplicity mechanism - see
   // psfPairedRawOutputs below) still matches this same pattern too.
   const RAW_PORT_COLOR = KIND_COLORS.raw;
+  // Media plan phase 6b: port data types (GET /port-dtypes,
+  // core/port_schema.py). A port's dot is coloured by its dtype; "any"
+  // ports keep the default look. Purely advisory - a mismatched wire still
+  // connects, it is just drawn in DTYPE_WARN_COLOR and a toast explains why.
+  // Hues picked to stay apart from the edge-kind colours above (attribute
+  // purple, control amber) that other slots already use.
+  const DTYPE_COLORS = {
+    text: '#e2e8f0', number: '#4ade80', json: '#fb923c',
+    image: '#22d3ee', audio: '#f472b6', video: '#facc15', media: '#818cf8',
+  };
+  const DTYPE_WARN_COLOR = '#ef4444';
+  const MEDIA_DTYPES = new Set(['image', 'audio', 'video', 'media']);
+  let portDtypes = {};
+
+  // Mirror of core/port_schema.py's dtype_warning() - keep the two in sync.
+  function dtypeWarning(src, tgt) {
+    src = src || 'any'; tgt = tgt || 'any';
+    if (src === 'any' || tgt === 'any' || src === tgt) return null;
+    const sMedia = MEDIA_DTYPES.has(src), tMedia = MEDIA_DTYPES.has(tgt);
+    if (sMedia && tMedia) return (src === 'media' || tgt === 'media') ? null : `${src} output into ${tgt} input`;
+    if (sMedia || tMedia) return `${src} output into ${tgt} input (media vs. plain values)`;
+    if (tgt === 'text' || (src === 'number' && tgt === 'json')) return null;
+    return `${src} output into ${tgt} input`;
+  }
+
+  function dtypeSlotExtra(dtype) {
+    if (!dtype || dtype === 'any' || !DTYPE_COLORS[dtype]) return undefined;
+    return { color_on: DTYPE_COLORS[dtype], color_off: DTYPE_COLORS[dtype], psfDtype: dtype };
+  }
+
+  // Colour for a link: its edge kind, or the warning colour when a data
+  // wire joins ports of incompatible dtypes.
+  function linkColor(link) {
+    const kind = link.psfKind || 'data';
+    const base = KIND_COLORS[kind] || KIND_COLORS.data;
+    if (kind !== 'data' && kind !== 'raw' && kind !== 'endpoint') return base;
+    const src = graph && graph.getNodeById(link.origin_id);
+    const tgt = graph && graph.getNodeById(link.target_id);
+    const out = src && src.outputs && src.outputs[link.origin_slot];
+    const inp = tgt && tgt.inputs && tgt.inputs[link.target_slot];
+    link.psfDtypeWarning = dtypeWarning(out && out.psfDtype, inp && inp.psfDtype);
+    return link.psfDtypeWarning ? DTYPE_WARN_COLOR : base;
+  }
   const RAW_PORT_RE = /^raw(_\w+|\d*)$/;
   // Feature flag, now scoped to exactly one thing: whether ForkNode's own
   // separate outN/rawN pairing (psfPairedRawOutputs below - a *different*
@@ -1306,7 +1351,8 @@
     // real, hand-declared 'raw' port - a genuine port name, not an
     // auto-duplicate - making it permanently unwireable from the editor;
     // that bug is what removing this filter fixes.
-    ins.forEach((name) => node.addInput(name, 0));
+    const dtypes = portDtypes[node.psfType] || { inputs: {}, outputs: {} };
+    ins.forEach((name) => node.addInput(name, 0, dtypeSlotExtra(dtypes.inputs[name])));
     const isTrigger = node.constructor && node.constructor.psfIsTrigger;
     outs.forEach((name) => {
       let extra;
@@ -1320,6 +1366,8 @@
         extra = { color_on: RAW_PORT_COLOR, color_off: RAW_PORT_COLOR, label: '⇢ ' + name };
       } else if (isTrigger) {
         extra = { color_on: KIND_COLORS.control, color_off: KIND_COLORS.control };
+      } else {
+        extra = dtypeSlotExtra(dtypes.outputs[name]);
       }
       node.addOutput(name, 0, extra);
     });
@@ -1661,7 +1709,8 @@
         toast(`That wire connected as '${kind}' instead of raw (target/source overrides it)`);
       }
       linkInfo.psfKind = kind;
-      linkInfo.color = KIND_COLORS[kind];
+      linkInfo.color = linkColor(linkInfo);
+      if (linkInfo.psfDtypeWarning) toast(`Type mismatch: ${linkInfo.psfDtypeWarning} - connected anyway`);
       syncWireToBackend('connect', srcNode, this, linkInfo, slot);
     };
 
@@ -2350,7 +2399,7 @@
         const tIdx = e.type === 'attribute' ? ensureAttributeSlot(t, e.target_port) : findInputSlotIndex(t, e.target_port || 'in');
         if (sIdx < 0 || tIdx < 0) return;
         const link = s.connect(sIdx, t, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       });
     } finally {
       suppressWireSync = false;
@@ -2553,7 +2602,7 @@
       const tIdx = findInputSlotIndex(sgNode, externalPort);
       if (sIdx >= 0 && tIdx >= 0) {
         const link = srcNode.connect(sIdx, sgNode, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       }
     });
     outboundBoundary.forEach((e) => {
@@ -2564,7 +2613,7 @@
       const tIdx = e.type === 'attribute' ? ensureAttributeSlot(tgtNode, e.target_port) : findInputSlotIndex(tgtNode, e.target_port);
       if (sIdx >= 0 && tIdx >= 0) {
         const link = sgNode.connect(sIdx, tgtNode, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       }
     });
     nodes.forEach((n) => { psfNodesById.delete(n.psfId); graph.remove(n); });
@@ -2620,7 +2669,7 @@
         const tIdx = e.type === 'attribute' ? ensureAttributeSlot(t, e.target_port) : findInputSlotIndex(t, e.target_port || 'in');
         if (sIdx >= 0 && tIdx >= 0) {
           const link = s.connect(sIdx, t, tIdx);
-          if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+          if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
         }
       });
 
@@ -3277,7 +3326,15 @@
   function refreshDetailsPanel() {
     const panel = document.getElementById('details');
     if (!panel) return;
-    if (!selectedNode) { panel.innerHTML = '<p class="muted">No node selected. Click a node to see live status and advanced JSON here.</p>'; return; }
+    if (!selectedNode) {
+      // Legend for the port dtype colours (media plan phase 6b).
+      const legend = Object.entries(DTYPE_COLORS)
+        .map(([name, color]) => `<span class="dtype-chip"><i style="background:${color}"></i>${name}</span>`).join('');
+      panel.innerHTML = '<p class="muted">No node selected. Click a node to see live status and advanced JSON here.</p>'
+        + `<div class="dtype-legend"><div class="muted">Port types</div>${legend}`
+        + `<span class="dtype-chip"><i style="background:${DTYPE_WARN_COLOR}"></i>type mismatch (wire)</span></div>`;
+      return;
+    }
     const n = selectedNode;
     const doc = nodeDocs[n.psfType] || {};
     panel.innerHTML = `
@@ -3494,13 +3551,15 @@
   async function init() {
     themeLiteGraph();
     try {
-      const [ps, cs, av] = await Promise.all([
+      const [ps, cs, av, pd] = await Promise.all([
         fetchJSON('/node-schema').catch(() => ({})),
         fetchJSON('/config-schema').catch(() => ({})),
         fetchJSON('/node-availability').catch(() => ({})),
+        fetchJSON('/port-dtypes').catch(() => ({})),
       ]);
       portSchema = ps || {};
       configSchema = cs || {};
+      portDtypes = (pd && pd.types) || {};
       unavailableTypes = (av && av.unavailable) || {};
     } catch (e) { /* fall back to defaults baked into rebuildPorts */ }
 

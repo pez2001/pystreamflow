@@ -5,7 +5,7 @@ import pathlib
 
 from .models import Graph
 from .plugin_manager import PluginManager
-from .port_schema import validate_edge
+from .port_schema import edge_warning, validate_edge
 from .registry import build_node_registry
 from .blob_store import ensure_cleanup_task
 from .media import MediaItem
@@ -219,6 +219,10 @@ class Engine:
             ) or validate_buffer(getattr(e, 'buffer', None))
             if err:
                 raise ValueError(f"Invalid edge {e.source}->{e.target}: {err}")
+            # Port-dtype mismatch (media plan phase 6b): advisory only.
+            warning = edge_warning(node_types[e.source], e.source_port, node_types[e.target], e.target_port, e.type)
+            if warning:
+                logger.warning("workflow edge %s->%s: %s", e.source, e.target, warning)
         # Check for cycles via Kahn's algorithm
         in_degree = {n.id: 0 for n in self.graph.nodes}
         adj = {n.id: [] for n in self.graph.nodes}
