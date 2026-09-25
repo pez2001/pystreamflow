@@ -132,6 +132,13 @@ Weil Frames auch Bilder sind, lassen sich alle Bild-Nodes aus Phase 3 direkt auf
 
 ### Phase 6: Editor und UI
 
+> **Status 6a (Live-View-Vorschau): umgesetzt** in `api/static/editor.js` und `api/ui.html`.
+> - Seitenpanel: Über dem JSON erscheint das neueste Medium der Node-History als `<img>`, `<audio controls>` oder `<video controls>`, andere Typen als Download-Link. Die Beschriftung zeigt Art, MIME-Typ, Maße, Dauer, pts und Größe. Ein Medium mit derselben Ref wird nicht neu gerendert, damit laufendes Audio oder Video beim 1-s-Poll nicht neu startet.
+> - „Letztes Frame“-Modus: `video_frame` und `audio_chunk` werden mit dem normalen 1-s-Poll aktualisiert und lassen sich per „⏸ Pause“ einfrieren. MJPEG ist nicht umgesetzt, der Poll reicht für die Vorschau.
+> - Das Live-View-Modal (Rechtsklick → „Live view…“) zeigt eine Galerie der bis zu 12 neuesten unterschiedlichen Medien.
+> - Auth: Medien werden per `fetch()` über den vorhandenen API-Key-Wrapper geladen und als `blob:`-URL angezeigt, `/media` bleibt geschützt. Die Object-URLs liegen in einem LRU-Cache (32 Einträge) und werden beim Verdrängen freigegeben. Ein abgelaufener Blob wird als „expired“ markiert.
+> - Offen: Vorschau direkt auf der Node-Kachel und die „Media“-Kategorie in der Palette. Beides braucht die Medien-Nodes aus Phase 2 bis 5.
+
 - **Port-Datentypen**: `port_schema.py` bekommt optional pro Port einen `dtype` (`any`, `text`, `number`, `json`, `image`, `audio`, `video`, `media`). `validate_edge()` warnt nur und blockiert nicht, damit es rückwärtskompatibel bleibt. Im Editor werden Ports nach `dtype` eingefärbt.
 - **Live-View-Vorschau** (`editor.js` rund um Zeile 3077): Wenn ein Eintrag `preview_url` hat, zeigt die Live-View `<img>`, `<audio controls>` oder `<video controls>` statt JSON-Text an. Für Video-Frame-Ströme gibt es einen „letztes Frame“-Modus mit Poll oder MJPEG.
 - **Vorschau direkt auf der Node-Kachel**: ein Thumbnail des letzten Bildes oder Frames, optional pro Node.

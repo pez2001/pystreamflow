@@ -3041,6 +3041,150 @@
   }
 
   // ------------------------------------------------------------------
+  // Media previews in the live view (media plan phase 6a).
+  //
+  // The backend's /nodes/{id}/last runs every item through
+  // core/media.py's to_jsonable(), which turns a MediaItem into a
+  // summary object: {"$media": kind, mime, size, ref, meta, preview_url}.
+  // preview_url points at GET /media/{ref}, which - like every other
+  // non-exempt route - needs the API key. An <img src> can't send an
+  // Authorization header, so each preview is fetched through the
+  // auth-injecting window.fetch wrapper at the top of this file and shown
+  // from a blob: object URL instead.
+  // ------------------------------------------------------------------
+  const MEDIA_URL_CACHE_MAX = 32;
+  const MEDIA_GALLERY_MAX = 12;
+  // preview_url -> Promise<objectURL|null>, oldest first (Map keeps
+  // insertion order; a hit is re-inserted to mark it recently used).
+  const mediaUrlCache = new Map();
+
+  function findMediaItems(value, out, seen, depth) {
+    out = out || [];
+    seen = seen || new Set();
+    depth = depth || 0;
+    if (!value || typeof value !== 'object' || depth > 6) return out;
+    if (typeof value.$media === 'string' && value.preview_url) {
+      if (!seen.has(value.ref)) { seen.add(value.ref); out.push(value); }
+      return out;
+    }
+    const children = Array.isArray(value) ? value : Object.values(value);
+    children.forEach((v) => findMediaItems(v, out, seen, depth + 1));
+    return out;
+  }
+
+  function fetchMediaUrl(previewUrl) {
+    if (mediaUrlCache.has(previewUrl)) {
+      const hit = mediaUrlCache.get(previewUrl);
+      mediaUrlCache.delete(previewUrl);
+      mediaUrlCache.set(previewUrl, hit);
+      return hit;
+    }
+    const p = fetch(previewUrl)
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => (blob ? URL.createObjectURL(blob) : null))
+      .catch(() => null);
+    mediaUrlCache.set(previewUrl, p);
+    while (mediaUrlCache.size > MEDIA_URL_CACHE_MAX) {
+      const [oldKey, oldUrl] = mediaUrlCache.entries().next().value;
+      mediaUrlCache.delete(oldKey);
+      oldUrl.then((u) => { if (u) URL.revokeObjectURL(u); });
+    }
+    return p;
+  }
+
+  function formatBytes(n) {
+    if (n == null) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function mediaCaption(m) {
+    const meta = m.meta || {};
+    const parts = [m.$media, m.mime];
+    if (meta.width && meta.height) parts.push(`${meta.width}×${meta.height}`);
+    if (meta.duration != null) parts.push(`${Number(meta.duration).toFixed(2)} s`);
+    if (meta.pts != null) parts.push(`pts ${meta.pts}`);
+    parts.push(formatBytes(m.size));
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function mediaElementTag(m) {
+    const major = String(m.mime || '').split('/')[0];
+    if (major === 'image') return 'img';
+    if (major === 'audio' || m.$media === 'audio' || m.$media === 'audio_chunk') return 'audio';
+    if (major === 'video' || m.$media === 'video') return 'video';
+    return null;
+  }
+
+  // Render `media` (one summary object, or null to hide) into `container`.
+  // Re-rendering the same ref is a no-op, so a poll tick never restarts a
+  // playing <audio>/<video>. With opts.follow (the default, used by the
+  // sidebar), a video_frame/audio_chunk stream shows only its latest item
+  // - "last frame" mode, refreshed by the regular 1 s poll - with a pause
+  // button to freeze the current frame.
+  function renderMediaPreview(container, media, opts) {
+    const follow = !opts || opts.follow !== false;
+    if (!media) {
+      container.hidden = true;
+      container.replaceChildren();
+      delete container.dataset.ref;
+      return;
+    }
+    container.hidden = false;
+    if (container.dataset.ref === media.ref) return;
+    if (follow && container.dataset.paused === '1' && container.dataset.ref) return;
+    container.dataset.ref = media.ref;
+
+    const tag = mediaElementTag(media);
+    const stream = media.$media === 'video_frame' || media.$media === 'audio_chunk';
+    const existing = container.querySelector('[data-role="media"]');
+    let el = existing && existing.tagName.toLowerCase() === tag && tag === 'img' ? existing : null;
+    if (!el) {
+      container.replaceChildren();
+      if (tag) {
+        el = document.createElement(tag);
+        el.dataset.role = 'media';
+        if (tag !== 'img') el.controls = true;
+        if (tag === 'img') el.alt = mediaCaption(media);
+        container.appendChild(el);
+      } else {
+        const link = document.createElement('a');
+        link.dataset.role = 'media';
+        link.textContent = 'Download';
+        link.href = '#';
+        link.onclick = (e) => {
+          e.preventDefault();
+          fetchMediaUrl(media.preview_url).then((u) => { if (u) window.open(u, '_blank', 'noopener'); });
+        };
+        container.appendChild(link);
+      }
+      const cap = document.createElement('div');
+      cap.className = 'media-cap';
+      container.appendChild(cap);
+      if (follow && stream) {
+        const btn = document.createElement('button');
+        btn.className = 'secondary media-pause';
+        btn.type = 'button';
+        const sync = () => { btn.textContent = container.dataset.paused === '1' ? '▶ Follow live' : '⏸ Pause'; };
+        btn.onclick = () => { container.dataset.paused = container.dataset.paused === '1' ? '0' : '1'; sync(); };
+        sync();
+        container.appendChild(btn);
+      }
+    }
+    const cap = container.querySelector('.media-cap');
+    if (cap) cap.textContent = (stream && follow ? 'live · ' : '') + mediaCaption(media);
+    if (tag) {
+      const ref = media.ref;
+      fetchMediaUrl(media.preview_url).then((u) => {
+        if (container.dataset.ref !== ref) return; // a newer item arrived meanwhile
+        if (u) { el.src = u; container.classList.remove('expired'); }
+        else { container.classList.add('expired'); if (cap) cap.textContent = `${mediaCaption(media)} · expired`; }
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Details / advanced panel (right sidebar) - the one surviving
   // Inspector role per the chosen scope: advanced raw-JSON edit + live
   // status, everything else now lives inline on the node as widgets.
@@ -3058,6 +3202,7 @@
       ${doc.desc ? `<p class="muted">${doc.desc}</p>` : ''}
       <button class="secondary" data-act="live">Refresh live view</button>
       <button class="secondary" data-act="json">Advanced JSON…</button>
+      <div id="liveMedia" class="live-media" hidden></div>
       <pre id="liveView">loading…</pre>
     `;
     panel.querySelector('[data-act="live"]').onclick = () => loadLive(n);
@@ -3068,6 +3213,13 @@
     fetchJSON(`/nodes/${node.psfId}/last?n=50`).then((j) => {
       const el = document.getElementById('liveView');
       if (!el) return;
+      // Media plan phase 6a: the newest image/audio/video item in this
+      // node's history gets a real preview above the JSON text.
+      const mediaEl = document.getElementById('liveMedia');
+      if (mediaEl) {
+        const media = findMediaItems((j.last || []).slice().reverse());
+        renderMediaPreview(mediaEl, media.length ? media[0] : null);
+      }
       // Feedback: "the sorting of the messages should be reversed (newest
       // on top)" - /nodes/{id}/last (BaseNode.get_last()) returns oldest-
       // to-newest, the order it's appended in; reverse it here, the same
@@ -3138,12 +3290,27 @@
     };
   }
   function openLiveModal(node) {
-    const overlay = openModal(`Live view — ${node.title || node.psfType}`, '<pre id="liveModalPre">loading…</pre>');
+    const overlay = openModal(`Live view — ${node.title || node.psfType}`,
+      '<div id="liveModalMedia" class="media-gallery" hidden></div><pre id="liveModalPre">loading…</pre>');
     fetchJSON(`/nodes/${node.psfId}/last?n=50`).then((j) => {
       const el = overlay.querySelector('#liveModalPre');
       // Same newest-first ordering as the sidebar's loadLive() above, for
       // consistency between the two live-view surfaces.
-      if (el) el.textContent = JSON.stringify((j.last || []).slice().reverse(), null, 2);
+      const entries = (j.last || []).slice().reverse();
+      if (el) el.textContent = JSON.stringify(entries, null, 2);
+      // Media plan phase 6a: a gallery of the newest distinct media items.
+      const gallery = overlay.querySelector('#liveModalMedia');
+      const media = findMediaItems(entries).slice(0, MEDIA_GALLERY_MAX);
+      if (gallery && media.length) {
+        gallery.hidden = false;
+        overlay.querySelector('.modal').classList.add('wide');
+        media.forEach((m) => {
+          const cell = document.createElement('div');
+          cell.className = 'live-media';
+          gallery.appendChild(cell);
+          renderMediaPreview(cell, m, { follow: false });
+        });
+      }
     });
   }
   function toast(msg) {
