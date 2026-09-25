@@ -54,6 +54,14 @@ class MyNode(BaseNode):
 ## Stats
 BaseNode tracks `items_in`, `items_out`, `bytes_in`, `bytes_out`, uptime and rates. Exposed via `/nodes/{id}/stats` and `health()`.
 
+## Editor: Live vs. Staged Nodes
+The node editor (`pystreamflow/api/static/editor.js`) keeps canvas and backend in sync in two ways:
+
+- **Live nodes** are created on the backend the moment they appear (`createPsfNode()` → `syncNodeToBackend()` → `POST /nodes`). This covers palette clicks, duplicates and nodes of a session opened with Load Session. Every wire drawn or removed between live nodes is sent immediately (`syncWireToBackend()` → `POST/DELETE /nodes/connect`), and a rejected connect is taken back off the canvas.
+- **Staged nodes** exist only on the canvas: everything bulk-loaded with `syncBackend: false` (Import, Load Demo, ungrouping a subgraph, the nodes inside the subgraph editor) gets `node.psfStaged = true`. Wires touching a staged node are canvas-only, and deleting a staged node sends no `DELETE`. Run builds the whole graph from the canvas (`graphToRunPayload()`), staged wires included, and then clears `psfStaged` on every node, since the session's nodes now exist on the backend under the same ids.
+
+A new bulk-load path that creates nodes with `syncBackend: false` gets this behaviour automatically. Pass `staged: false` only when the nodes already exist on the backend (as Load Session does).
+
 ## Media Items (Images, Audio, Video)
 Phase 1 of `docs/plans/media_types_plan.md`. Media travels through the graph as a `MediaItem` (`pystreamflow/core/media.py`), never as bare `bytes`:
 

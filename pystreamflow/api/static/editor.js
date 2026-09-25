@@ -2190,7 +2190,9 @@
   // previously-displayed node there would race with (and could destroy)
   // a session that's still genuinely running.
   function syncNodeDeleteToBackend(node) {
-    if (suppressNodeDeleteSync || !node || !node.psfId) return;
+    // A staged node (see createPsfNode()) has no backend instance of its
+    // own - a DELETE could only hit some unrelated node with the same id.
+    if (suppressNodeDeleteSync || !node || !node.psfId || node.psfStaged) return;
     fetch(`/nodes/${node.psfId}`, { method: 'DELETE' }).catch(() => {});
   }
 
@@ -2199,6 +2201,14 @@
   // drawn on the canvas, immediately, instead of only at "Run".
   function syncWireToBackend(action, srcNode, tgtNode, linkInfo, targetSlot) {
     if (suppressWireSync || !srcNode || !tgtNode || !srcNode.psfId || !tgtNode.psfId) return;
+    // Bug fix: a wire drawn between nodes that exist only on the canvas so
+    // far (staged by Import/Load Demo/ungroup/the subgraph editor - see
+    // createPsfNode()'s psfStaged) used to be POSTed to /nodes/connect,
+    // rejected with "source or target not found", and then torn back off
+    // the canvas - the wire the user just drew vanished. Such a wire is
+    // canvas-only until Run, which builds the whole graph, this wire
+    // included, from the canvas (graphToRunPayload()).
+    if (srcNode.psfStaged || tgtNode.psfStaged) return;
     const sourceSlot = srcNode.outputs && srcNode.outputs[linkInfo.origin_slot];
     const inputSlot = tgtNode.inputs && tgtNode.inputs[targetSlot];
     const body = {
@@ -2280,6 +2290,11 @@
     });
     if (!node) return null;
     if (opts.label) node.title = opts.label;
+    // Staged = on the canvas only, no backend instance yet (bulk loads
+    // pass syncBackend:false). Wires to it stay canvas-only until Run - see
+    // syncWireToBackend(). Load Session passes staged:false: that
+    // session's nodes already exist on the backend.
+    node.psfStaged = opts.syncBackend === false && opts.staged !== false;
     node.pos = [opts.x != null ? opts.x : 200 + Math.random() * 200, opts.y != null ? opts.y : 200 + Math.random() * 200];
     graph.add(node);
     if (opts.syncBackend !== false) syncNodeToBackend(node);
@@ -2344,7 +2359,8 @@
     };
   }
 
-  function loadWorkflowIntoGraph(nodesData, edgesData) {
+  function loadWorkflowIntoGraph(nodesData, edgesData, loadOpts) {
+    loadOpts = loadOpts || {};
     // graph.clear() below calls LiteGraph's own node.remove() on every
     // node currently on the canvas, which would otherwise fire a real
     // DELETE /nodes/{id} for each one via the onNodeRemoved hook set in
@@ -2380,7 +2396,7 @@
       // eventual Run action (see syncNodeToBackend()'s comment above
       // createPsfNode() for why POSTing each one individually here would
       // be redundant and would collide ids with the Session's own copy).
-      const node = createPsfNode(n.type, { id: n.id, config: n.config || {}, x, y, label: n.label, syncBackend: false });
+      const node = createPsfNode(n.type, { id: n.id, config: n.config || {}, x, y, label: n.label, syncBackend: false, staged: loadOpts.staged });
       if (node) idMap.set(n.id, node);
     });
     // suppressWireSync: this is a bulk stage-onto-canvas restore, same
@@ -2735,7 +2751,10 @@
       if (sessJson.error) { alert('Cannot run workflow: ' + sessJson.error); return; }
       currentSessionId = sessJson.id;
       const startJson = await fetchJSON(`/sessions/${currentSessionId}/start`, { method: 'POST' });
-      if (startJson.error) { alert('Cannot run workflow: ' + startJson.error); }
+      if (startJson.error) { alert('Cannot run workflow: ' + startJson.error); return; }
+      // Every canvas node now has a live backend instance (the session's,
+      // under the same id), so wires drawn from here on connect live again.
+      graph._nodes.forEach((n) => { n.psfStaged = false; });
     } catch (err) {
       alert('Failed to run workflow: ' + err.message);
     }
@@ -2874,7 +2893,7 @@
     row.querySelector('[data-act="load"]').onclick = async () => {
       const wf = await fetchJSON('/sessions/' + encodeURIComponent(sessionId) + '/workflow');
       if (wf.error) { toast(wf.error); return; }
-      loadWorkflowIntoGraph(wf.nodes || [], wf.edges || []);
+      loadWorkflowIntoGraph(wf.nodes || [], wf.edges || [], { staged: false });
       toast('Session loaded into canvas: ' + sessionId);
       closeModal();
     };
