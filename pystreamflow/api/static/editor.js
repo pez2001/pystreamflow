@@ -820,7 +820,46 @@
     if (!delta) return;
     node.size[1] += delta;
     if (node._displayLiveViewBaseHeight != null) node._displayLiveViewBaseHeight += delta;
+    if (delta > 0) pushDownNodesBelow(node);
     if (graphcanvas) graphcanvas.setDirty(true, true);
+  }
+
+  // After `node` grew taller, move every node that now overlaps it from
+  // below just far enough down to keep NODE_GAP between them - and, in
+  // turn, whatever those moved nodes now overlap. Nodes that still fit
+  // aren't touched, and nothing is ever pulled back up when a tile
+  // shrinks, so a layout only changes where it has to.
+  const NODE_GAP = 12;
+
+  function nodeTop(n) {
+    return n.pos[1] - (LiteGraph.NODE_TITLE_HEIGHT || 30); // pos is the body; the title bar sits above it
+  }
+
+  function nodeBottom(n) {
+    return (n.flags && n.flags.collapsed) ? n.pos[1] : n.pos[1] + n.size[1];
+  }
+
+  function pushDownNodesBelow(node) {
+    if (!graph) return;
+    // Nodes only ever move down and are only pushed by nodes above them,
+    // so this settles; the step cap is just a guard.
+    const queue = [node];
+    let steps = 0;
+    while (queue.length && steps++ < 10000) {
+      const upper = queue.shift();
+      const left = upper.pos[0];
+      const right = upper.pos[0] + upper.size[0];
+      const limit = nodeBottom(upper) + NODE_GAP;
+      graph._nodes
+        .filter((n) => n !== upper && n.pos[1] >= upper.pos[1]
+          && n.pos[0] < right && n.pos[0] + n.size[0] > left
+          && nodeTop(n) < limit)
+        .sort((a, b) => a.pos[1] - b.pos[1])
+        .forEach((n) => {
+          n.pos[1] += limit - nodeTop(n);
+          queue.push(n); // its own neighbours below may overlap now
+        });
+    }
   }
 
   function updateTilePreview(node, entry) {
