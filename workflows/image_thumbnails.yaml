@@ -1,0 +1,37 @@
+# Media example 1 (docs/plans/media_types_plan.md, phase 7):
+# every new image dropped into files/photos becomes a WebP thumbnail in
+# files/thumbnails.
+#
+# Needs: pip install 'pystreamflow[image]' (or the runtime-media Docker
+# image). Paths are relative to the working directory - /app under
+# Docker, where files/ is the mounted ./files directory.
+nodes:
+  - id: photos
+    type: DirectoryInputNode
+    config:
+      path: files/photos
+      media_only: true
+      emit_as: media        # whole files as media items, not paths
+      poll_interval: 2.0
+  - id: upright
+    type: ImageDecodeNode
+    config:
+      auto_orient: true     # rotate phone photos by their EXIF tag
+  - id: resize
+    type: ImageResizeNode
+    config:
+      max_side: 800
+  - id: webp
+    type: ImageConvertNode
+    config:
+      format: webp
+      quality: 80
+  - id: save
+    type: MediaFileOutputNode
+    config:
+      path_pattern: files/thumbnails/{stem}.{ext}
+edges:
+  - {source: photos, source_port: files, target: upright, target_port: in}
+  - {source: upright, target: resize}
+  - {source: resize, target: webp}
+  - {source: webp, target: save}

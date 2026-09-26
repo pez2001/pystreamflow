@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # See docker-compose.yml: "runtime" (slim) or "runtime-media".
+      target: ${PSF_IMAGE_TARGET:-runtime}
+      args:
+        PSF_MEDIA_EXTRAS: ${PSF_MEDIA_EXTRAS:-media}
     container_name: pystreamflow-prod
     ports:
       - "8000:8000"
@@ -36,12 +40,18 @@ services:
       - PSF_LOGS_DIR=/app/logs
       - PSF_FILES_DIR=/app/files
       - PSF_DATA_DIR=/app/data
+      # Media blob store under PSF_DATA_DIR/blobs: size cap and idle TTL
+      # (see pystreamflow/core/blob_store.py).
+      - PSF_BLOB_MAX_MB=${PSF_BLOB_MAX_MB:-1024}
+      - PSF_BLOB_TTL_S=${PSF_BLOB_TTL_S:-600}
     restart: always
     deploy:
       resources:
         limits:
           cpus: '1'
-          memory: 512M
+          # Raise this for media workloads (video decoding/encoding, local
+          # speech recognition), e.g. PSF_MEMORY_LIMIT=2G.
+          memory: ${PSF_MEMORY_LIMIT:-512M}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

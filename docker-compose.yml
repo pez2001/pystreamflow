@@ -2,7 +2,15 @@ version: '3.9'
 
 services:
   pystreamflow:
-    build: .
+    build:
+      context: .
+      # "runtime" (default, slim) or "runtime-media" (ffmpeg + Pillow,
+      # numpy/soundfile, PyAV - needed for the image/audio/video nodes).
+      # E.g. `PSF_IMAGE_TARGET=runtime-media docker compose up -d --build`.
+      target: ${PSF_IMAGE_TARGET:-runtime}
+      args:
+        # extras for runtime-media; "media,stt" adds faster-whisper
+        PSF_MEDIA_EXTRAS: ${PSF_MEDIA_EXTRAS:-media}
     container_name: pystreamflow
     ports:
       - "8000:8000"

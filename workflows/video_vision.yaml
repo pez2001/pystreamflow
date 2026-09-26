@@ -1,0 +1,47 @@
+# Media example 3 (docs/plans/media_types_plan.md, phase 7):
+# describe a video once per second with a local vision model and keep a
+# JSON log of the answers.
+#
+# Put a video at files/videos/input.mp4 (re-read whenever it changes), or
+# point `source` of the decode node at a camera URL (rtsp://...).
+#
+# Needs: pip install 'pystreamflow[media]' (runtime-media Docker image)
+# and LM Studio (or another OpenAI-compatible server) with a
+# vision-capable model loaded.
+nodes:
+  - id: video
+    type: MediaFileInputNode
+    config:
+      path: files/videos/input.mp4
+      emit_on: change
+  - id: frames
+    type: VideoDecodeNode
+    config:
+      fps: 1                # one frame per second of video
+      max_side: 1024
+  - id: small
+    type: ImageResizeNode
+    config:
+      max_side: 512         # fewer image tokens per request
+  - id: vision
+    type: LMStudioNode
+    config:
+      base_url: http://localhost:1234/v1
+      model: local-model
+      image_prompt: Describe in one sentence what happens in this video frame.
+  - id: to_json
+    type: JSONOutputNode
+    config:
+      pretty: false
+  - id: log
+    type: FileOutputNode
+    config:
+      path: files/vision_log.jsonl
+edges:
+  - {source: video, target: frames}
+  - {source: frames, target: small}
+  - {source: small, target: vision}
+  # `out` carries the whole exchange: the frame (as a JSON summary with its
+  # pts), the answer, reasoning and token usage - one JSON line per frame
+  - {source: vision, target: to_json}
+  - {source: to_json, target: log}
