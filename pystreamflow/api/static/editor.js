@@ -762,6 +762,95 @@
     } catch (e) { /* nothing more we can do - clipboard access just isn't available here */ }
   }
 
+  // ------------------------------------------------------------------
+  // Tile preview (media plan phase 6): a thumbnail of the newest image or
+  // video frame a node emitted, drawn at the bottom of the node itself.
+  // Fed by pollNodeStatus() (the same /last poll that drives the status
+  // dot) through updateTilePreview(); the image is fetched through the
+  // auth-aware fetchMediaUrl() like the live-view previews. Per node it can
+  // be switched off from the context menu; that choice is stored as the
+  // editor-only config key `_preview: false`, so it survives Run, Export
+  // and Import (the backend ignores `_` keys).
+  // ------------------------------------------------------------------
+  const TILE_PREVIEW_H = 110;
+
+  function tilePreviewEnabled(node) {
+    return !(node.properties && node.properties._preview === false);
+  }
+
+  function addTilePreviewWidget(node) {
+    const w = node.addWidget('psf_tile_preview', 'preview', '', () => {});
+    w.computeSize = function (width) {
+      return [width, node._tilePreview && tilePreviewEnabled(node) ? TILE_PREVIEW_H : 0];
+    };
+    w.draw = function (ctx, n, width, y) {
+      const p = n._tilePreview;
+      if (!p || !tilePreviewEnabled(n)) return;
+      const pad = 8;
+      const boxW = width - pad * 2;
+      const boxH = TILE_PREVIEW_H - 8;
+      ctx.save();
+      ctx.fillStyle = '#020617';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(pad, y, boxW, boxH, [6]);
+      else ctx.rect(pad, y, boxW, boxH);
+      ctx.fill();
+      ctx.clip();
+      const img = p.img;
+      const scale = Math.min(boxW / img.width, (boxH - 14) / img.height); // fit, keep aspect
+      const dw = img.width * scale;
+      const dh = img.height * scale;
+      ctx.drawImage(img, pad + (boxW - dw) / 2, y + 2 + (boxH - 14 - dh) / 2, dw, dh);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(p.caption, pad + 6, y + boxH - 4);
+      ctx.restore();
+    };
+    return w;
+  }
+
+  // Grow/shrink a node by however much its own computeSize() changed - not
+  // a full setSize(computeSize()), which would undo a manual resize (and
+  // DisplayNode's live view sizes itself off its height, see its baseline).
+  function resizeForTilePreview(node, apply) {
+    const before = node.computeSize()[1];
+    apply();
+    const delta = node.computeSize()[1] - before;
+    if (!delta) return;
+    node.size[1] += delta;
+    if (node._displayLiveViewBaseHeight != null) node._displayLiveViewBaseHeight += delta;
+    if (graphcanvas) graphcanvas.setDirty(true, true);
+  }
+
+  function updateTilePreview(node, entry) {
+    if (!entry) return;
+    const media = findMediaItems([entry]).find((m) => String(m.mime || '').startsWith('image/'));
+    if (!media || !tilePreviewEnabled(node) || node._tilePreviewRef === media.ref) return;
+    node._tilePreviewRef = media.ref;
+    fetchMediaUrl(media.preview_url).then((url) => {
+      if (!url || node._tilePreviewRef !== media.ref) return;
+      const img = new Image();
+      img.onload = () => {
+        if (node._tilePreviewRef !== media.ref) return;
+        const meta = media.meta || {};
+        const caption = [meta.width && meta.height ? `${meta.width}×${meta.height}` : '',
+          meta.pts != null ? `pts ${Number(meta.pts).toFixed(2)} s` : (meta.filename || '')].filter(Boolean).join(' · ');
+        resizeForTilePreview(node, () => { node._tilePreview = { img, caption }; });
+      };
+      img.src = url;
+    });
+  }
+
+  function setTilePreviewEnabled(node, enabled) {
+    resizeForTilePreview(node, () => {
+      if (!node.properties) node.properties = {};
+      if (enabled) delete node.properties._preview;
+      else node.properties._preview = false;
+    });
+    if (enabled) node._tilePreviewRef = null; // pick up the latest image on the next poll
+  }
+
   function addWidgetsForNode(node) {
     node.widgets = [];
     // Feature request: "add a really nice visually looking realtime view
@@ -903,6 +992,9 @@
     }
     const cfg = node.properties || {};
     Object.keys(cfg).forEach((key) => {
+      // `_`-prefixed keys are editor-only settings (e.g. `_preview`, see
+      // the tile preview below), not node config to edit.
+      if (key.startsWith('_')) return;
       const value = cfg[key];
       const override = fieldOverride(node.psfType, key);
       if (override && override.kind === 'node_ref') {
@@ -1148,6 +1240,7 @@
         copyTextToClipboard(visible.join('\n'));
       });
     }
+    addTilePreviewWidget(node);
     node.size = node.computeSize();
     // Freezes "this node's natural total height, with the live view at
     // its own minimum" as a baseline the live view's own computeSize()
@@ -1780,6 +1873,10 @@
         // do the same pointless thing on the same node.
         ...(keyGroup[this.psfKey] === 'Outputs' ? [] : [{ content: '➤ Manual emit', callback: () => manualEmitNode(this) }]),
         { content: '👁 Live view…', callback: () => openLiveModal(this) },
+        ...(this._tilePreview || !tilePreviewEnabled(this) ? [{
+          content: tilePreviewEnabled(this) ? '🖼 Hide preview on node' : '🖼 Show preview on node',
+          callback: () => setTilePreviewEnabled(this, !tilePreviewEnabled(this)),
+        }] : []),
         { content: '📋 Duplicate', callback: () => duplicatePsfNode(this) },
         { content: '💾 Save as template', callback: () => saveTemplate(this) },
         { content: '🧬 Advanced JSON…', callback: () => openAdvancedModal(this) },
@@ -3071,6 +3168,7 @@
             ? await fetchJSON(`/nodes/${n.psfId}/last?n=${DISPLAY_HISTORY_LINES}`)
             : await fetchJSON(`/nodes/${n.psfId}/last?n=1`);
           const lastEntry = j.last && j.last.length ? j.last[j.last.length - 1] : null;
+          updateTilePreview(n, lastEntry);
           if (lastEntry) {
             nodeLastSeen[n.psfId] = now;
             // JSON.stringify as a cheap "did this actually change since

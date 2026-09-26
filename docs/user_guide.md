@@ -172,6 +172,8 @@ Media travels through a workflow as **media items**: the file's bytes plus its t
 * `audio_transcribe.yaml` - upload a recording to `/api/transcribe`; it is cut at pauses, resampled to 16 kHz and transcribed, the text goes to `files/transcripts.txt` and MQTT. Needs a speech-to-text server (OpenAI-compatible) or `backend: local`.
 * `video_vision.yaml` - `files/videos/input.mp4` is sampled at one frame per second and described by a vision model in LM Studio; one JSON line per frame in `files/vision_log.jsonl`.
 
+Nodes whose newest item is an image or video frame show a small thumbnail at the bottom of their tile; right-click a node → "Hide preview on node" to turn it off for that node (saved with the workflow).
+
 All media node types and their options are listed under "Media Nodes", "Image Nodes", "Audio Nodes" and "Video Nodes" in the [node reference](nodes/index.md). Ports are coloured by the kind of data they carry; a red wire means the two ends probably don't fit (for example an image into a text node).
 
 ## Tips
