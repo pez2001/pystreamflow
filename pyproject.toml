@@ -18,10 +18,30 @@ dependencies = [
     # docstring for why). Requires >=2.0 for MCPServer (mcp<2's
     # equivalent, FastMCP, was renamed in the SDK's 2.x release).
     "mcp>=2.0",
+    # multipart/form-data file uploads to WebInputNode/ApiInputNode
+    # (media plan phase 2; core/media_http.py).
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
+# Media plan phase 3: image nodes (pystreamflow/nodes/image_nodes.py).
+# Without it those node types are simply not registered.
+image = ["Pillow>=10.0"]
+# Media plan phase 4: audio nodes (pystreamflow/nodes/audio_nodes.py).
+# soundfile's wheels bundle libsndfile (WAV/FLAC/OGG/MP3); AAC/M4A and
+# audio inside video additionally need the ffmpeg executable.
+audio = ["numpy>=1.24", "soundfile>=0.12"]
+# Media plan phase 5: video nodes (pystreamflow/nodes/video_nodes.py);
+# without PyAV they fall back to the ffmpeg executable.
+video = ["av>=12.0"]
+# Local speech recognition for SpeechToTextNode's `backend: local`.
+stt = ["faster-whisper>=1.0"]
+media = ["Pillow>=10.0", "numpy>=1.24", "soundfile>=0.12", "av>=12.0"]
 dev = [
+    "Pillow>=10.0",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "av>=12.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",

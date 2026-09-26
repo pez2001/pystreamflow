@@ -33,6 +33,14 @@ Fazit: Die Engine-Architektur mit async Pipes und Fan-out/Fan-in trägt Medien. 
 
 ### Phase 1: Fundament (Kern, ohne neue Abhängigkeiten)
 
+> **Status: umgesetzt.** Code in `core/media.py`, `core/blob_store.py`, `core/node.py`, `core/stream.py`, `core/engine.py`, `core/metrics.py`, `api/server.py` und `mcp/server.py`; Tests in `tests/test_media_phase1.py`; Beschreibung im Abschnitt „Media Items“ von `docs/developer_guide.md`. Abweichungen und Ergänzungen zum Plan:
+> - Lebensdauer der Blobs per TTL (ab letztem Lesen oder Schreiben) plus LRU-Obergrenze, keine Referenzzählung.
+> - Medien-Ports deklariert eine Node-Klasse über `MEDIA_OUTPUT_PORTS = {port: drop_policy}`. Port-`dtype`s kommen erst in Phase 6b.
+> - Neue Drop-Policy `drop_oldest` (behält die neuesten Frames). `drop` verwirft jetzt sofort, wenn der Puffer voll ist, und nicht erst nach einem Timeout.
+> - `BaseNode.emit_wait()` wartet auf die Puts, damit Decoder in Phase 5 echten Gegendruck bekommen. `emit()` plant die Puts weiterhin im Hintergrund ein.
+> - `GET /nodes/{id}` gibt es nicht. Die zentrale Serialisierung greift stattdessen bei `/nodes/{id}/last`, `/nodes/{id}/emit`, `/reflection/nodes[/{id}]`, `/sessions/{id}/nodes/{id}` und allen MCP-Tool-Ergebnissen.
+> - `GET /media/{ref}` liefert nur Bild-, Audio- und Video-Typen mit ihrem MIME-Typ aus, alles andere als `application/octet-stream` mit `nosniff`. Weil `<img>` keinen Auth-Header senden kann, muss die Live-View-Vorschau in Phase 6a die Datei per `fetch()` mit API-Key laden.
+
 **1.1 `core/media.py`: Datentyp `MediaItem`**
 ```python
 @dataclass
@@ -66,6 +74,15 @@ Dazu kommt ein Helfer `sniff_mime(bytes)` über Magic Bytes für PNG, JPEG, GIF,
 
 ### Phase 2: Datei-Ein-/Ausgabe für Medien
 
+> **Status: umgesetzt.** Neue Nodes in `nodes/media_file_input.py` und `nodes/media_file_output.py`, HTTP-Teil in `core/media_http.py`, Tests in `tests/test_media_phase2.py`, Doku im Abschnitt „Media Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - `MediaFileInputNode`: `emit_on: change` sendet beim Start und bei jeder Änderung von Größe oder mtime, `start` nur einmal pro Pfad. Der Ausgang ist über `MEDIA_OUTPUT_PORTS` als `block` deklariert (ganze Dateien gehen nie verloren), gesendet wird per `emit_wait()`.
+> - `DirectoryInputNode`: neue Config `extensions`, `media_only` und `emit_as: path|media`. Ohne diese Optionen verhält er sich wie bisher.
+> - `MediaFileOutputNode`: Muster-Felder `{node}`, `{index}`, `{ext}`, `{kind}`, `{stem}`, `{timestamp}`. Bestehende Dateien werden standardmäßig nie überschrieben. Der Node gibt zusätzlich `{path, mime, size}` auf `out` aus, damit die geschriebene Datei weiterverdrahtet werden kann.
+> - Web-/API-Eingang: neben JSON jetzt auch `multipart/form-data` (Formularfelder landen in `meta.form`), rohe `image/*`-, `audio/*`-, `video/*`- und `application/octet-stream`-Bodies sowie normale urlencoded-Formulare. Obergrenze per `max_upload_mb` bzw. `PSF_MAX_UPLOAD_MB` (100), darüber HTTP 413. Neue Abhängigkeit `python-multipart`.
+> - Web-/API-Ausgang: `<path>/media` bzw. `/api/<uri>/media` liefern das neueste Medium mit echtem Content-Type und Range-Support aus, ein abgelaufener Blob ergibt 410. Ohne SSE liefern auch `<path>` bzw. `/api/<uri>/raw` ein Medium direkt aus. Die JSON-Wege tragen Zusammenfassungen, keine Bytes.
+> - Base64: `data_url: true` beim Encode. Beim Decode wird aus einer Data-URL ein `MediaItem`, `output: auto|text|bytes|media` erzwingt den Ergebnistyp. Normales Base64 verhält sich wie bisher.
+> - Palette: neue Kategorie „Media“ mit den beiden neuen Nodes (vorgezogen aus Phase 6).
+
 - **`MediaFileInputNode`**: Liest eine **ganze** Datei als ein `MediaItem` (nicht tailend) und schließt den MIME-Typ aus Endung und Magic Bytes. Gelesen wird in `to_thread`. Config: `path`, `emit_on: start|change`.
 - **`DirectoryInputNode`** erweitern: optionaler Filter `media_only`/`extensions` und Option `emit_as: path|media`.
 - **`MediaFileOutputNode`**: Schreibt eine Datei pro Item nach Pattern, z. B. `files/out/{node}_{index:05d}.{ext}`. `record_output()` enthält den Pfad plus eine Vorschau-Ref.
@@ -74,6 +91,15 @@ Dazu kommt ein Helfer `sniff_mime(bytes)` über Magic Bytes für PNG, JPEG, GIF,
 - **`Base64EncodeNode` und `Base64DecodeNode`**: Verstehen `MediaItem` und liefern optional eine Data-URL (`data:image/png;base64,...`) für LLM-, HTTP- und MQTT-Pfade.
 
 ### Phase 3: Bilder (Extra `[image]`: Pillow, optional numpy)
+
+> **Status: umgesetzt.** Code in `core/media_transform.py` (Basis `MediaTransformNode`) und `nodes/image_nodes.py`, Vision in `nodes/llm_lmstudio.py`, Tests in `tests/test_media_phase3.py`, Doku im Abschnitt „Image Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Pillow ist optional (`pip install 'pystreamflow[image]'`, auch in `[media]` und `[dev]`). Fehlt es, werden die Bild-Nodes nicht registriert. `GET /node-availability` meldet sie mit Installationshinweis, der Editor graut sie aus (auch im Suchfeld gesperrt), und `Engine.validate()` lehnt Workflows mit ihnen ab, statt still einen No-op-Node einzusetzen. Das ist ein vorgezogener Teil von Phase 6.
+> - `ImageDecodeNode` legt kein Pillow-Objekt in `meta`. Das wäre nicht JSON-fähig und würde bei jedem Fan-out mitkopiert. Stattdessen prüft der Node das Bild, trägt `width`/`height`/`mode`/`format` ein und korrigiert den MIME-Typ. Optional richtet er Fotos per EXIF auf (`auto_orient`). Jeder Bild-Node dekodiert selbst, was bei Bildgrößen im Megabyte-Bereich vertretbar ist.
+> - Alle Nodes arbeiten auf `image` und `video_frame`, laufen in einem Worker-Thread und reichen alles andere unverändert durch. Bei kaputten Bildern geben sie das Original weiter und zählen den Fehler am Node.
+> - `ImageFilterNode` bietet zusätzlich Sättigung und Schärfe; `ImageRotateNode` kann `angle: exif`.
+> - `ImageThumbnailNode` wird noch nicht intern für die Live-View genutzt; die Vorschau zeigt weiterhin das Originalbild. `ImageComposeNode` bleibt wie geplant für später.
+> - LM-Studio-Vision: neuer Eingang `prompt` und Config `image_prompt`. Bilder gehen als `image_url` mit Data-URL raus, mehrere Bilder in einer Liste oder einem Dict sind möglich.
+> - Das Docker-Image enthält Pillow noch nicht (kommt mit Phase 7); dort sind die Bild-Nodes bis dahin ausgegraut.
 
 | Node | Funktion |
 |---|---|
@@ -92,6 +118,17 @@ Alle bauen auf einer neuen Basis `MediaTransformNode` auf, analog zu `SingleInpu
 
 ### Phase 4: Audio (Extra `[audio]`: soundfile und numpy, ffmpeg für MP3/AAC)
 
+> **Status: umgesetzt.** Code in `nodes/audio_nodes.py`, `nodes/speech_to_text.py` und `core/ffmpeg.py`, Tests in `tests/test_media_phase4.py`, Doku im Abschnitt „Audio Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Audio-Chunks sind kleine 16-Bit-WAV-Dateien statt roher PCM-Blöcke. Damit ist jeder Chunk selbstbeschreibend und in der Live-View abspielbar; der Overhead liegt bei 44 Byte pro Chunk. Die Verarbeitungs-Nodes geben immer WAV aus.
+> - libsndfile ≥ 1.1 (in den soundfile-Wheels enthalten) kann MP3 lesen und schreiben. ffmpeg ist deshalb nur für AAC/M4A, Opus-Ausgabe und Audiospuren aus Videos nötig. Es läuft in einem Worker-Thread über `subprocess.run` mit Timeout und Temp-Dateien. Das funktioniert auch unter Windows, `core/subprocess_exec.py` wird dafür nicht gebraucht.
+> - `AudioDecodeNode` liest Chunks blockweise (lange Dateien müssen nicht als Rohdaten in den Speicher), markiert den letzten Chunk mit `last` und nimmt auch Videos an (Audiospur über ffmpeg).
+> - `AudioEncodeNode` und `AudioSegmentNode` schließen ab bei: `segment_s`, einem ganzen `audio`-Item, einem `last`-Chunk, einem Item am neuen Eingang `flush` oder nach `flush_idle_s` ohne Input. Der Plan nannte hier nur „Segment oder Trigger“.
+> - `AudioResampleNode` arbeitet mit Tiefpass und linearer Interpolation ohne scipy. Das reicht für Sprache; jeder Chunk wird einzeln umgerechnet.
+> - `AudioLevelNode` liefert ein Dict auf `out` und zusätzlich die nackten Zahlen auf `rms_db`/`peak_db`, damit Compare- und Threshold-Nodes direkt anschließen können.
+> - `AudioSegmentNode` misst in 20-ms-Fenstern, die Schnitte liegen also auf ±20 ms genau. Er schneidet nur an Stille oder nach Zeit; eine echte Sprach-Aktivitätserkennung (VAD) gibt es nicht.
+> - Offene Frage STT: beide Wege umgesetzt. `backend: api` (Standard, OpenAI-kompatibles `/audio/transcriptions`, keine neue Abhängigkeit) oder `backend: local` (faster-whisper, Extra `[stt]`). LM Studio selbst bietet keinen Transkriptions-Endpoint.
+> - Offen: Das Docker-Image enthält weder numpy/soundfile noch ffmpeg (kommt mit Phase 7).
+
 | Node | Funktion |
 |---|---|
 | `AudioDecodeNode` | Datei zu PCM; Ausgabe als ganzes Stück oder in Chunks (`chunk_ms`) als `audio_chunk` mit `sample_rate`, `channels` und `pts` |
@@ -103,6 +140,16 @@ Alle bauen auf einer neuen Basis `MediaTransformNode` auf, analog zu `SingleInpu
 | `SpeechToTextNode` (optional, Extra `[stt]`) | faster-whisper lokal oder ein OpenAI-kompatibler Endpoint, passend zum LM-Studio-Ansatz. Ausgabe ist Text, damit die ganze Text-Node-Familie weiterverwendet werden kann |
 
 ### Phase 5: Video (Extra `[video]`: PyAV oder ffmpeg-Subprozess)
+
+> **Status: umgesetzt.** Code in `nodes/video_nodes.py`, Tests in `tests/test_media_phase5.py`, Doku im Abschnitt „Video Nodes“ von `docs/nodes/index.md`. Details und Abweichungen:
+> - Wie geplant ist PyAV der Standard. Der ffmpeg-Fallback deckt Frames (JPEG über eine MJPEG-Pipe), Info (ffprobe), Thumbnail und Encode (concat-Demuxer) ab, liefert aber keine Audiospur und keine PNG-Frames. Registriert werden die Video-Nodes, sobald PyAV **oder** ffmpeg vorhanden ist. Die JPEG-Frames erzeugt PyAV direkt über seinen MJPEG-Codec, Pillow ist dafür nicht nötig.
+> - `VideoDecodeNode` sampelt selbst per `fps` (auf festem Raster, übersprungene Frames werden gar nicht erst kodiert) und kann per `max_side` verkleinern. Das spart viel Arbeit gegenüber „alles dekodieren, dann `VideoFrameSampleNode`“; die Sample-Node gibt es trotzdem (every_n, fps, keyframes).
+> - Echtzeit-Quellen (offene Frage): `VideoDecodeNode.source` nimmt auch Stream-URLs (RTSP über TCP, HTTP) und verbindet nach `reconnect_s` neu. Einen `CameraInputNode` für lokale Webcams gibt es nicht; das lässt sich hier ohne Kamera nicht testen.
+> - Backpressure: Beide Ausgänge des Decoders blockieren (`emit_wait`), ein File wird also nie schneller dekodiert als verarbeitet. Für Live-Kameras dokumentiert: Edge mit `buffer: {drop_policy: drop_oldest}`.
+> - `VideoEncodeNode` schreibt inkrementell in eine Temp-Datei (kein Frame-Puffer im RAM), Audio kommt über den Port `audio`. Nach dem `last`-Frame wartet er `audio_grace_s` auf nachlaufenden Ton. Frames und Audio werden per Lock serialisiert, weil PyAV-Container nicht threadsicher sind (sonst hing der ganze Prozess).
+> - Bug in der Engine gefunden und behoben (bestand schon vorher): Pipes waren pro Knotenpaar statt pro Kante angelegt. Zwei Kanten zwischen denselben zwei Nodes teilten sich eine Pipe.
+> - Metriken: Frames pro Sekunde ergeben sich in Prometheus aus `rate(pystreamflow_node_items_processed_total{node_id="…"}[1m])`, ein eigener Zähler kam nicht dazu. Drop-Rate und Blob-Store-Größe gibt es seit Phase 1.
+> - Offen: Das Docker-Image enthält weder PyAV noch ffmpeg (kommt mit Phase 7).
 
 Entscheidung: **PyAV** als Standard, weil es Frame-genauen Zugriff bietet und keine Pipe-Parser braucht. Wenn PyAV fehlt, wird auf einen **ffmpeg-Subprozess** über `subprocess_exec.py` zurückgefallen.
 
@@ -124,12 +171,34 @@ Weil Frames auch Bilder sind, lassen sich alle Bild-Nodes aus Phase 3 direkt auf
 
 ### Phase 6: Editor und UI
 
+> **Status 6b (Port-Datentypen): umgesetzt** in `core/port_schema.py`, `api/server.py`, `mcp/server.py`, `core/engine.py`, `api/static/editor.js` und `api/ui.html`; Tests in `tests/test_media_phase6b.py`.
+> - dtypes `any`, `text`, `number`, `json`, `image`, `audio`, `video`, `media`, deklariert in `_PORT_DTYPES` nur dort, wo der Typ eindeutig ist (alle Medien-Nodes, Text- und Zahlen-Familie, einige JSON- und LLM-Ausgänge). Alles andere ist `any`. Videoframes gelten als `image`.
+> - Anders als im Plan skizziert steckt der dtype nicht in `get_port_schema()`/`/node-schema`, sondern in `get_port_dtypes()` und dem neuen Endpoint `GET /port-dtypes`. Grund: das bestehende Schema-Format wird von Tests und vom Editor exakt ausgewertet und bleibt so unverändert.
+> - `validate_edge()` bleibt unverändert und blockiert nichts Neues. Die neue Funktion `edge_warning()` liefert nur Hinweise: `POST /nodes/connect` und das MCP-Tool `connect_nodes` geben `warning` zurück, `POST /workflows` gibt `warnings` zurück, und `Engine.validate()` loggt sie.
+> - Regeln: `any` und gleiche Typen passen; `media` passt zu jeder Medienart; alles außer Medien passt in `text`; `number` passt in `json`. Gewarnt wird bei Medien ↔ Nicht-Medien, bei verschiedenen Medienarten und bei Text/JSON in `number`.
+> - Editor: Die Port-Punkte werden nach dtype eingefärbt (Farben so gewählt, dass sie sich von den Farben für Attribut- und Control-Slots abheben). Ein unpassender Datendraht wird rot gezeichnet (auch beim Laden eines Workflows) und löst einen Hinweis aus, wird aber verbunden. Im leeren Detailbereich zeigt eine Legende die Farben.
+> - Vorschau direkt auf der Node-Kachel: umgesetzt. Jeder Node, dessen neuestes Item ein Bild oder ein Videoframe ist, zeigt unten ein Thumbnail (110 px hoch) mit Maßen und `pts` bzw. Dateinamen und wächst dafür nur um die Vorschauhöhe (ein manuelles Resize bleibt erhalten). Die Daten kommen aus dem vorhandenen 1-s-Poll, das Bild wird über `fetchMediaUrl()` mit API-Key geladen. Ein- und ausschalten lässt sich die Vorschau pro Node im Kontextmenü („🖼 Hide/Show preview on node“). Gespeichert wird das als editor-only Config-Key `_preview: false`: Er reist bei Run, Export und Import mit, wird nicht als Widget angezeigt und nicht live ans Backend geschickt. Wächst eine Kachel, rücken Nodes, die sie danach überlappen würden (horizontal überlappend, darunter liegend), kaskadierend so weit nach unten, dass 12 px Abstand bleiben; alles andere bleibt stehen, und beim Ausblenden rückt nichts zurück.
+
+> **Status 6a (Live-View-Vorschau): umgesetzt** in `api/static/editor.js` und `api/ui.html`.
+> - Seitenpanel: Über dem JSON erscheint das neueste Medium der Node-History als `<img>`, `<audio controls>` oder `<video controls>`, andere Typen als Download-Link. Die Beschriftung zeigt Art, MIME-Typ, Maße, Dauer, pts und Größe. Ein Medium mit derselben Ref wird nicht neu gerendert, damit laufendes Audio oder Video beim 1-s-Poll nicht neu startet.
+> - „Letztes Frame“-Modus: `video_frame` und `audio_chunk` werden mit dem normalen 1-s-Poll aktualisiert und lassen sich per „⏸ Pause“ einfrieren. MJPEG ist nicht umgesetzt, der Poll reicht für die Vorschau.
+> - Das Live-View-Modal (Rechtsklick → „Live view…“) zeigt eine Galerie der bis zu 12 neuesten unterschiedlichen Medien.
+> - Auth: Medien werden per `fetch()` über den vorhandenen API-Key-Wrapper geladen und als `blob:`-URL angezeigt, `/media` bleibt geschützt. Die Object-URLs liegen in einem LRU-Cache (32 Einträge) und werden beim Verdrängen freigegeben. Ein abgelaufener Blob wird als „expired“ markiert.
+> - Offen: Vorschau direkt auf der Node-Kachel und die „Media“-Kategorie in der Palette. Beides braucht die Medien-Nodes aus Phase 2 bis 5.
+
 - **Port-Datentypen**: `port_schema.py` bekommt optional pro Port einen `dtype` (`any`, `text`, `number`, `json`, `image`, `audio`, `video`, `media`). `validate_edge()` warnt nur und blockiert nicht, damit es rückwärtskompatibel bleibt. Im Editor werden Ports nach `dtype` eingefärbt.
 - **Live-View-Vorschau** (`editor.js` rund um Zeile 3077): Wenn ein Eintrag `preview_url` hat, zeigt die Live-View `<img>`, `<audio controls>` oder `<video controls>` statt JSON-Text an. Für Video-Frame-Ströme gibt es einen „letztes Frame“-Modus mit Poll oder MJPEG.
 - **Vorschau direkt auf der Node-Kachel**: ein Thumbnail des letzten Bildes oder Frames, optional pro Node.
 - **Palette**: neue Kategorie „Media“ mit Bild, Audio und Video. Nodes, deren Extra fehlt, erscheinen ausgegraut mit einem Hinweis wie `pip install pystreamflow[video]`.
 
 ### Phase 7: MCP, CLI, Deployment, Doku
+
+> **Status: umgesetzt.** Tests in `tests/test_media_phase7.py`.
+> - MCP: `send_to_node` versteht `{"$media": {path|base64|ref}}`. Pfade sind aus Sicherheitsgründen auf das Files- und das Data-Verzeichnis sowie `PSF_MCP_MEDIA_ROOTS` beschränkt, weil `/mcp` standardmäßig ohne Auth erreichbar ist. Neues Tool `get_media(ref | node_id, max_side)` gibt Bilder als MCP-Image-Content zurück (standardmäßig auf 1024 px verkleinert) und Audio als Audio-Content; `/mcp/call` liefert stattdessen Base64. `get_node_last` lieferte schon seit Phase 1 nur Zusammenfassungen und URLs (`mcp/media_tools.py`).
+> - Docker: neues Target `runtime-media` mit ffmpeg und `.[media]` (per `PSF_MEDIA_EXTRAS` erweiterbar, z. B. `media,stt`). Das Standard-Target `runtime` bleibt schlank. In beiden Compose-Dateien wählt `PSF_IMAGE_TARGET` das Target; `docker-compose.prod.yml` bekommt zusätzlich `PSF_MEMORY_LIMIT` (512M reichen für Video nicht) sowie `PSF_BLOB_MAX_MB`/`PSF_BLOB_TTL_S`. Die doppelte Hand-Installation der Abhängigkeiten ist entfernt; alles kommt aus `pyproject.toml`, womit `mcp` und `paho-mqtt` jetzt garantiert im Image sind. Gebaut und getestet wurden beide Images. Nur der `apt-get install ffmpeg`-Schritt ließ sich hier nicht prüfen, weil die Netzwerk-Richtlinie der Testumgebung `deb.debian.org` blockiert.
+> - Doku: Kapitel „Working with Images, Audio and Video“ in `docs/user_guide.md`, MCP-Abschnitte in `docs/ai_guide.md`/`docs/ai_skill.md`, README. Die Node-Referenz hat seit den Phasen 2–5 eigene Abschnitte.
+> - Beispiel-Workflows `workflows/image_thumbnails.yaml`, `audio_transcribe.yaml` und `video_vision.yaml`, alle drei im `runtime-media`-Container end-to-end ausgeführt (Transkription und Vision gegen Fake-Server). `JSONOutputNode` serialisiert Medien jetzt als Zusammenfassung statt als `str()`, damit das Vision-Log echtes JSON ist.
+> - Nicht umgesetzt: eine CLI-Erweiterung (der Plan nennt „CLI“ nur im Titel, ohne konkreten Punkt).
 
 - **MCP-Tools**: `send_to_node` nimmt `{"$media": {"path": ...}}` oder Base64 an. `node_last` liefert Zusammenfassungen plus URLs, keine Payloads, damit Tokens und Kontext geschont werden. Ein neues Tool `get_media(ref)` gibt Bilder als MCP-Image-Content zurück, damit eine KI Frames tatsächlich sehen kann.
 - **Docker**: Ein zweites Image-Target `runtime-media` installiert `ffmpeg` und `.[media]`. Das Standard-Image bleibt schlank. In `docker-compose.prod.yml` wählt eine Variable das Target. Beim Dockerfile fällt nebenbei auf, dass es die Abhängigkeiten aus `pyproject.toml` teilweise doppelt per Hand nachinstalliert (`mcp` und `paho-mqtt` fehlen dort). Das sollte beim Umbau mit aufgeräumt werden.

@@ -401,7 +401,7 @@ async def test_streamable_http_transport_full_round_trip(live_mcp_server):
             names = {t.name for t in tools.tools}
             assert 'get_version' in names
             assert 'connect_nodes' in names
-            assert len(tools.tools) == 30
+            assert len(tools.tools) == 31  # 30 + get_media (media plan phase 7)
 
             result = await session.call_tool('get_version', {})
             assert result.is_error is False
@@ -433,7 +433,7 @@ async def test_sse_transport_full_round_trip(live_mcp_server):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 30
+            assert len(tools.tools) == 31  # 30 + get_media (media plan phase 7)
             result = await session.call_tool('get_version', {})
             assert result.is_error is False
             assert 'pystreamflow' in result.content[0].text

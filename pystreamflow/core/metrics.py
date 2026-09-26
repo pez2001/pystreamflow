@@ -40,6 +40,7 @@ but never actually wired into a real deployment):
 from fastapi import APIRouter, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 
+from .blob_store import get_blob_store
 from .web_server import _nodes
 
 router = APIRouter()
@@ -60,6 +61,25 @@ node_errors = Counter('pystreamflow_node_errors_total', 'Errors', ['node_id'])
 # see this module's own docstring, point 3, for the double-counting bug
 # this closes.
 _last_seen: dict[str, tuple[int, int]] = {}
+
+# Media plan phase 1.5/1.2: items dropped by bounded edges (summed over
+# every consumer pipe of a node's output ports, attributed to the
+# producing node) and the media blob store's footprint.
+pipe_dropped = Counter('pystreamflow_pipe_dropped_total', 'Items dropped by full bounded edges', ['node_id'])
+blob_store_bytes = Gauge('pystreamflow_blob_store_bytes', 'Bytes held in the media blob store')
+blob_store_blobs = Gauge('pystreamflow_blob_store_blobs', 'Blobs held in the media blob store')
+_last_dropped: dict[str, int] = {}
+
+
+def _output_dropped(node) -> int:
+    total = 0
+    for pipes in getattr(node, 'outputs', {}).values():
+        for pipe, _kind in pipes:
+            try:
+                total += int(pipe.stats().get('dropped', 0))
+            except Exception:
+                pass
+    return total
 
 
 def update_metrics():
@@ -82,11 +102,26 @@ def update_metrics():
 
         _last_seen[nid] = (error_count, items_total)
 
+        dropped = _output_dropped(node)
+        dropped_delta = dropped - _last_dropped.get(nid, 0)
+        if dropped_delta > 0:
+            pipe_dropped.labels(node_id=nid).inc(dropped_delta)
+        _last_dropped[nid] = dropped
+
     # Drop bookkeeping for nodes that no longer exist (deleted, or a
     # from a previous session) so this dict doesn't grow without bound
     # across a long-running daemon's whole lifetime.
     for stale_id in set(_last_seen) - live_ids:
         del _last_seen[stale_id]
+    for stale_id in set(_last_dropped) - live_ids:
+        del _last_dropped[stale_id]
+
+    try:
+        st = get_blob_store().stats()
+        blob_store_bytes.set(st['bytes'])
+        blob_store_blobs.set(st['count'])
+    except Exception:
+        pass
 
 
 @router.get('/metrics')

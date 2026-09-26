@@ -1,16 +1,47 @@
 import asyncio
 from typing import AsyncIterable, AsyncIterator
 
+DROP_POLICIES = ('block', 'drop', 'drop_oldest', 'raise')
+
+
 class Pipe:
+    """Async queue between two nodes.
+
+    ``drop_policy`` decides what a ``put()`` onto a full, bounded pipe
+    (``maxsize > 0``) does:
+
+    - ``block`` (default): wait for space.
+    - ``drop``: discard the *new* item and count it in ``dropped`` - right
+      away when no ``timeout`` is given, otherwise once ``timeout`` expires.
+    - ``drop_oldest``: discard the oldest queued item to make room, so the
+      consumer always gets the most recent ones - what a live video/audio
+      stream wants (media plan phase 1.5).
+    - ``raise``: raise ``asyncio.TimeoutError`` once ``timeout`` expires.
+    """
+
     def __init__(self, maxsize: int = 0, drop_policy: str = 'block'):
+        if drop_policy not in DROP_POLICIES:
+            raise ValueError(f"unknown drop_policy {drop_policy!r} (expected one of {', '.join(DROP_POLICIES)})")
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
         self.closed = False
-        self.drop_policy = drop_policy  # block | drop | raise
+        self.drop_policy = drop_policy
         self.dropped = 0
 
     async def put(self, item, timeout: float | None = None):
         if self.closed:
             raise RuntimeError("Pipe closed")
+        if self.queue.full():
+            if self.drop_policy == 'drop_oldest':
+                try:
+                    self.queue.get_nowait()
+                    self.dropped += 1
+                except asyncio.QueueEmpty:
+                    pass
+                self.queue.put_nowait(item)
+                return True
+            if self.drop_policy == 'drop' and timeout is None:
+                self.dropped += 1
+                return False
         try:
             if timeout is not None:
                 await asyncio.wait_for(self.queue.put(item), timeout=timeout)

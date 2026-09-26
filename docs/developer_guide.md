@@ -54,6 +54,40 @@ class MyNode(BaseNode):
 ## Stats
 BaseNode tracks `items_in`, `items_out`, `bytes_in`, `bytes_out`, uptime and rates. Exposed via `/nodes/{id}/stats` and `health()`.
 
+## Editor: Live vs. Staged Nodes
+The node editor (`pystreamflow/api/static/editor.js`) keeps canvas and backend in sync in two ways:
+
+- **Live nodes** are created on the backend the moment they appear (`createPsfNode()` → `syncNodeToBackend()` → `POST /nodes`). This covers palette clicks, duplicates and nodes of a session opened with Load Session. Every wire drawn or removed between live nodes is sent immediately (`syncWireToBackend()` → `POST/DELETE /nodes/connect`), and a rejected connect is taken back off the canvas.
+- **Staged nodes** exist only on the canvas: everything bulk-loaded with `syncBackend: false` (Import, Load Demo, ungrouping a subgraph, the nodes inside the subgraph editor) gets `node.psfStaged = true`. Wires touching a staged node are canvas-only, and deleting a staged node sends no `DELETE`. Run builds the whole graph from the canvas (`graphToRunPayload()`), staged wires included, and then clears `psfStaged` on every node, since the session's nodes now exist on the backend under the same ids.
+
+Config keys starting with `_` are editor-only settings (currently `_preview: false`, the per-node tile-preview switch): the editor shows no widget for them and doesn't push them to a live node, but they travel with the workflow like any other config value; backend nodes ignore them.
+
+A new bulk-load path that creates nodes with `syncBackend: false` gets this behaviour automatically. Pass `staged: false` only when the nodes already exist on the backend (as Load Session does).
+
+## Media Items (Images, Audio, Video)
+Phase 1 of `docs/plans/media_types_plan.md`. Media travels through the graph as a `MediaItem` (`pystreamflow/core/media.py`), never as bare `bytes`:
+
+```python
+from pystreamflow.core.media import MediaItem
+
+item = await MediaItem.afrom_bytes(data, meta={"source_path": path})  # MIME sniffed from magic bytes
+self.emit("out", item)
+...
+payload = await item.aget_bytes()   # works for inline and blob-stored items
+```
+
+- Payloads up to `PSF_MEDIA_INLINE_MAX_MB` (default 2) stay inline; larger ones go to the content-addressed blob store (`core/blob_store.py`, `<PSF_DATA_DIR>/blobs` or `PSF_BLOB_DIR`), and only the SHA-256 `ref` travels through pipes. Blobs expire `PSF_BLOB_TTL_S` (600) seconds after their last read/write. The store is capped at `PSF_BLOB_MAX_MB` (1024) with LRU eviction, and a background task cleans it up every `PSF_BLOB_CLEANUP_INTERVAL_S` (60) seconds.
+- `str(item)` is a short description like `<image/png 1920x1080 3.1MB>`, so text nodes stay readable.
+- `BaseNode` counts `bytes_in`/`bytes_out` by payload size (never via `str(bytes)`). Its live-view history keeps raw binary above `max_last_item_bytes` (node config, or `PSF_LAST_ITEM_MAX_BYTES`, default 64 KiB) only as `{kind: binary, size, head}`, while `manual_emit()` still replays the real last item per port.
+- Everything returned by `/nodes/{id}/last`, `/reflection/*`, `/sessions/{id}/nodes/{id}` and the MCP tools goes through `to_jsonable()`: bytes become `{"$binary": size, "head": "<hex>"}`, and MediaItems become their `summary()` plus a `preview_url` pointing at `GET /media/{ref}` (API-key protected, supports `Range`).
+- The editor's live view (sidebar and the "Live view…" modal) finds these summaries anywhere in a node's last items and previews them as `<img>`/`<audio>`/`<video>`. It fetches `preview_url` through its API-key-injecting `fetch` wrapper and shows the result as a `blob:` URL, because an `<img src>` can't send the auth header. `video_frame`/`audio_chunk` streams follow the newest item on every poll, with a pause button.
+- Nodes that read or write media use the helpers rather than re-implementing them: `nodes/media_file_input.py`'s `load_media_file()` (whole file → `MediaItem`, run it via `asyncio.to_thread`), `core/media.py`'s `guess_mime()`/`extension_for_mime()`, and `core/media_http.py` for HTTP (`parse_request()` for uploads, `media_response()`/`register_media_route()` to serve an item with its Content-Type and `Range` support, `json_payload()` for JSON/SSE output). The node-facing side is documented under "Media Nodes" in `docs/nodes/index.md`.
+- A node that turns one media item into another subclasses `core/media_transform.py`'s `MediaTransformNode`: implement `transform_media(item)` (blocking, runs in a worker thread) and optionally `configure()` (raise `ValueError` for bad config), and set `ACCEPT_KINDS`. `nodes/image_nodes.py` is the reference (`open_image()`/`to_item()` for Pillow). A node module with an optional dependency is imported in `nodes/__init__.py` inside `try/except ImportError`, and its types are listed in `UNAVAILABLE_NODE_TYPES` when the import fails, which feeds `GET /node-availability`, the greyed-out palette and `Engine.validate()`.
+- ffmpeg is reached only through `core/ffmpeg.py`'s `convert()` (file to file via a temp dir, blocking - call it from a worker thread; `FFmpegNotFound` when neither `PSF_FFMPEG` nor `PATH` has it). Audio helpers for new nodes live in `nodes/audio_nodes.py`: `decode_audio()` → float32 `(frames, channels)` plus sample rate, `audio_item()` to build a WAV/FLAC/... item with the standard audio `meta`, `levels()`/`to_db()`, `resample()`/`remix()`. Nodes that collect audio across items extend `_AudioBufferNode` there.
+- Video (`nodes/video_nodes.py`): `pick_backend()` resolves `backend: auto|pyav|ffmpeg`; `_MediaSource` turns an item into a file path (the blob-store file when stored out of line, else a temp file) or passes a URL through; `iter_pyav()`/`iter_ffmpeg()` are blocking generators of `('frame'|'audio', bytes, meta)` that a node drains with `asyncio.to_thread(next, gen, None)`. Never touch one PyAV container from two threads at once - serialize with a lock as `VideoEncodeNode` does.
+- Port data types: when a new node type's ports carry one clear kind of value, add them to `_PORT_DTYPES` in `core/port_schema.py` (only non-`any` ports; `tests/test_media_phase6b.py` checks every entry names a real port). They are advisory - `edge_warning()` reports mismatches, `validate_edge()` never rejects on them. `editor.js`'s `dtypeWarning()` mirrors `dtype_warning()`; change both together.
+- Backpressure: a node class declares media output ports with `MEDIA_OUTPUT_PORTS = {"frames": "drop_oldest"}`. Edges leaving such a port get a bounded queue (`PSF_MEDIA_EDGE_MAXSIZE`, default 8) with that drop policy (`block`, `drop`, `drop_oldest` or `raise`; see `core/stream.py`). Any edge can override it in the workflow YAML with `buffer: {maxsize: 4, drop_policy: drop}`, and `POST /nodes/connect` accepts the same `buffer` field. Use `await self.emit_wait(port, item)` in high-rate producers so a `block` edge actually slows them down. Drops show up in `stats()` and as `pystreamflow_pipe_dropped_total` in Prometheus, next to `pystreamflow_blob_store_bytes`/`_blobs`.
+
 ## Authentication
 `pystreamflow/core/auth.py`'s `get_or_create_api_key()` is the single source of truth for the main API's key: `PSF_API_KEY` env var if set, otherwise a generated key persisted to `data_dir()/api_key.txt` (or `$PSF_API_KEY_FILE`) and reused across restarts. `check_api_key()` validates an `Authorization: Bearer <key>` or `X-API-Key` header against it - `api/server.py`'s `_require_api_key` middleware calls this on every request except the small exemption list defined right above it (`_AUTH_EXEMPT_PATHS`/`_AUTH_EXEMPT_PREFIXES`) - extend that list, not the auth module itself, if a future route needs to be public. This is deliberately a separate mechanism from `pystreamflow/mcp/server.py`'s own `PSF_MCP_API_KEY`/`require_auth()`, which stays opt-in (unset means no auth) so this project's auth history doesn't retroactively change behavior for an existing MCP deployment - don't merge the two.
 

@@ -148,6 +148,34 @@ A few routes are always public, with no key needed, so the editor page itself ca
 * **CLI**: pass `--api-key` on any command that needs it, or set `$PSF_API_KEY` once in your shell so every command picks it up with no flag needed.
 * **MCP**: unaffected - `/mcp/*` keeps its own, separate, opt-in key (`$PSF_MCP_API_KEY`), unset by default. The two keys are independent; setting one doesn't require or affect the other.
 
+## Working with Images, Audio and Video
+Media travels through a workflow as **media items**: the file's bytes plus its type and metadata (file name, size, image dimensions, duration, timestamps). Text nodes see a short description such as `<image/png 1920x1080 3.1MB>`, and the editor's live view shows a real preview (image, audio or video player). Large payloads are kept in a blob store under `data/blobs` (expired after 10 idle minutes, capped at 1 GB - see `PSF_BLOB_*` in the developer guide).
+
+**Install the media support.** The core install has no media libraries; those node types appear greyed out in the palette with an install hint.
+
+* Docker: `PSF_IMAGE_TARGET=runtime-media docker compose up -d --build` builds the `runtime-media` image (ffmpeg, Pillow, numpy/soundfile, PyAV). For local speech recognition add `PSF_MEDIA_EXTRAS=media,stt` (large). With `docker-compose.prod.yml`, also raise `PSF_MEMORY_LIMIT` (default 512M) - e.g. `2G` - for video work.
+* pip: `pip install 'pystreamflow[media]'`, or only `[image]`, `[audio]`, `[video]`; `[stt]` for faster-whisper. AAC/M4A audio and the video nodes' fallback need the `ffmpeg` executable.
+
+**Getting media into a workflow**
+
+* A folder: DirectoryInputNode with `emit_as: media` (and `media_only: true`).
+* One file: MediaFileInputNode (re-emits when the file changes).
+* An upload: WebInputNode/ApiInputNode accept `curl -F file=@photo.jpg http://localhost:8080/api/<uri>` or a raw body with `Content-Type: image/png` (limit `max_upload_mb`, default 100).
+* A camera or stream: VideoDecodeNode with `source: rtsp://...`.
+* From an AI assistant: the MCP tool `send_to_node` with `{"$media": {"path": "files/photo.jpg"}}` or base64 data.
+
+**Getting media out**: MediaFileOutputNode (one file per item), WebOutputNode/ApiOutputNode (`…/media` serves the newest item with its real content type), Base64EncodeNode with `data_url: true`, or the MCP tool `get_media`.
+
+**Examples** in `workflows/` (Import them in the editor):
+
+* `image_thumbnails.yaml` - images dropped into `files/photos` become 800 px WebP thumbnails in `files/thumbnails` (phone photos rotated upright).
+* `audio_transcribe.yaml` - upload a recording to `/api/transcribe`; it is cut at pauses, resampled to 16 kHz and transcribed, the text goes to `files/transcripts.txt` and MQTT. Needs a speech-to-text server (OpenAI-compatible) or `backend: local`.
+* `video_vision.yaml` - `files/videos/input.mp4` is sampled at one frame per second and described by a vision model in LM Studio; one JSON line per frame in `files/vision_log.jsonl`.
+
+Nodes whose newest item is an image or video frame show a small thumbnail at the bottom of their tile; right-click a node → "Hide preview on node" to turn it off for that node (saved with the workflow). When a tile grows for its preview, nodes directly below it move down so nothing overlaps.
+
+All media node types and their options are listed under "Media Nodes", "Image Nodes", "Audio Nodes" and "Video Nodes" in the [node reference](nodes/index.md). Ports are coloured by the kind of data they carry; a red wire means the two ends probably don't fit (for example an image into a text node).
+
 ## Tips
 * Nodes auto-start on first input if `auto_start: true`
 * Use Trigger nodes to control start/stop/pause/resume/step/emit/reset of other nodes - and a node's `control` input accepts more than one Trigger source at once, so e.g. one node can pause a target while a separate node independently resumes it

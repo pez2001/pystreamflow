@@ -45,6 +45,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import get_route_path
+from ..core.media import to_jsonable
 from ..core.web_server import _nodes, http_endpoint_info
 
 logger = logging.getLogger("pystreamflow.mcp")
@@ -195,7 +196,12 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="send_to_node",
-        description="Send data to a node's input pipe",
+        description=(
+            "Send data to a node's input pipe. To send an image/audio/video, use a payload of "
+            '{"$media": {"path": "<file under the files/data dir>"}} or '
+            '{"$media": {"base64": "<data or data: URL>", "mime": "image/png", "filename": "x.png"}} or '
+            '{"$media": {"ref": "<ref or preview_url from get_node_last>"}}'
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -421,6 +427,20 @@ TOOLS: List[Tool] = [
         }
     ),
     Tool(
+        name="get_media",
+        description=(
+            "Return a media item so you can look at or listen to it: images (incl. video frames) come back "
+            "as image content, audio as audio content, anything else as a summary. Pass ref (a media ref or "
+            "the preview_url from get_node_last) or node_id (that node's newest media item). max_side "
+            "(default 1024, 0 = original) shrinks images first to save tokens."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"ref": {"type": "string"}, "node_id": {"type": "string"},
+                           "max_side": {"type": "integer"}},
+        }
+    ),
+    Tool(
         name="get_session_node",
         description="Get one node's health/config/stats, scoped to a specific session (see list_session_nodes)",
         input_schema={
@@ -442,7 +462,6 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
     # second time (they're already behind their own transport-level auth -
     # see _MCPTransportAuth below).
     from ..core.session_manager import session_manager
-    from ..core.stream import Pipe
     import asyncio
 
     args = args or {}
@@ -529,11 +548,16 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
         return {"result": {"status": "updated", "node_id": node_id}}
 
     if tool == "send_to_node":
+        from .media_tools import resolve_media_payload
         node_id = args.get("node_id")
-        payload = args.get("payload")
         node = _nodes.get(node_id)
         if not node:
             return {"error": "node not found"}
+        # Media plan phase 7: {"$media": {...}} becomes a real MediaItem.
+        try:
+            payload = await asyncio.to_thread(resolve_media_payload, args.get("payload"))
+        except ValueError as e:
+            return {"error": str(e)}
         if node.inputs:
             pipe = next(iter(node.inputs.values()))
             asyncio.create_task(pipe.put(payload))
@@ -737,6 +761,7 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
             _cancel_attribute_pump,
             _edge_pipes,
             _pump_attribute,
+            edge_pipe as make_edge_pipe,
         )
         from ..core.port_schema import validate_edge
 
@@ -752,7 +777,7 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
         err = validate_edge(type(src).__name__, source_port, type(tgt).__name__, target_port, edge_type)
         if err:
             return {"error": err}
-        pipe = Pipe()
+        pipe = make_edge_pipe(src, source_port)
         # Phase 2 of the wire-kind-unification design: a 'raw' edge is
         # wired exactly like a 'data' edge below - only the recorded
         # delivery kind differs, which is what makes BaseNode.emit()
@@ -772,7 +797,10 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
             _attribute_pump_tasks[key] = asyncio.create_task(_pump_attribute(pipe, tgt, target_port))
         else:
             tgt.add_input(target_port, pipe)
-        return {"result": {"status": "connected"}}
+        # Port-dtype mismatch (media plan phase 6b): connected anyway, reported.
+        from ..core.port_schema import edge_warning
+        warning = edge_warning(type(src).__name__, source_port, type(tgt).__name__, target_port, edge_type)
+        return {"result": {"status": "connected", **({"warning": warning} if warning else {})}}
 
     if tool == "disconnect_nodes":
         # Mirrors connect_nodes() above and api/server.py's
@@ -919,6 +947,24 @@ async def _execute_tool(tool: str, args: Optional[Dict[str, Any]] = None) -> Dic
             for nid, n in nodes.items()
         }}
 
+    if tool == "get_media":
+        import base64 as _b64
+        from .media_tools import load_media_for_tool
+        max_side = args.get("max_side", 1024)
+        try:
+            loaded = await asyncio.to_thread(
+                load_media_for_tool, args.get("ref"), args.get("node_id"),
+                None if max_side in (None, 0) else int(max_side), _nodes,
+            )
+        except (ValueError, KeyError) as e:
+            return {"error": str(e)}
+        result = {"summary": loaded["summary"], "mime": loaded["mime"]}
+        if loaded["data"] is not None:
+            # /call (plain JSON) gets base64; the MCP tool wrapper turns this
+            # into real image/audio content instead.
+            result["base64"] = _b64.b64encode(loaded["data"]).decode("ascii")
+        return {"result": result}
+
     if tool == "get_session_node":
         from ..core.web_server import get_session_nodes
         sid = args.get("session_id")
@@ -965,7 +1011,10 @@ def _unwrap(result: Dict[str, Any]) -> Any:
     # intact end to end.
     if "error" in result:
         raise ToolError(result["error"])
-    return result.get("result")
+    # Binary payloads/MediaItems -> JSON-safe summaries (media plan phase
+    # 1.4) - the SDK would otherwise fail serializing raw bytes, and a
+    # model has no use for megabytes of base64 in its context anyway.
+    return to_jsonable(result.get("result"))
 
 
 _TOOL_DESCRIPTIONS = {t.name: t.description for t in TOOLS}
@@ -1019,6 +1068,22 @@ async def update_node_config(node_id: str, config: Dict[str, Any]) -> Any:
 @mcp_server.tool(description=_TOOL_DESCRIPTIONS["send_to_node"])
 async def send_to_node(node_id: str, payload: Dict[str, Any]) -> Any:
     return _unwrap(await _execute_tool("send_to_node", {"node_id": node_id, "payload": payload}))
+
+
+@mcp_server.tool(description=_TOOL_DESCRIPTIONS["get_media"])
+async def get_media(ref: Optional[str] = None, node_id: Optional[str] = None, max_side: int = 1024) -> Any:
+    import base64 as _b64
+    import json as _json
+    from mcp.server.mcpserver import Audio, Image
+
+    result = _unwrap(await _execute_tool("get_media", {"ref": ref, "node_id": node_id, "max_side": max_side}))
+    summary = _json.dumps(result["summary"])
+    if "base64" not in result:
+        return summary
+    data = _b64.b64decode(result["base64"])
+    fmt = result["mime"].split("/", 1)[1].split(";", 1)[0]
+    content = Image(data=data, format=fmt) if result["mime"].startswith("image/") else Audio(data=data, format=fmt)
+    return [content, summary]
 
 
 @mcp_server.tool(description=_TOOL_DESCRIPTIONS["node_start"])
@@ -1335,7 +1400,7 @@ def list_tools(authorization: str = Header(None), x_api_key: str = Header(None, 
 @app.post("/call")
 async def call_tool(req: ToolCall, authorization: str = Header(None), x_api_key: str = Header(None, alias="X-API-Key")):
     require_auth(authorization, x_api_key)
-    return await _execute_tool(req.tool, req.arguments or {})
+    return to_jsonable(await _execute_tool(req.tool, req.arguments or {}))
 
 
 # The real MCP transport routes, merged directly into this app's own

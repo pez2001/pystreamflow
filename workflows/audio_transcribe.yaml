@@ -1,0 +1,56 @@
+# Media example 2 (docs/plans/media_types_plan.md, phase 7):
+# upload a recording, cut it into speech segments, transcribe each one,
+# append the text to a file and publish it via MQTT.
+#
+#   curl -F file=@meeting.wav http://localhost:8080/api/transcribe
+#
+# Needs: pip install 'pystreamflow[audio]' (runtime-media Docker image),
+# and an OpenAI-compatible speech-to-text server at base_url (e.g.
+# speaches / faster-whisper-server) - or set the stt node to
+# `backend: local` with pip install 'pystreamflow[stt]'. The MQTT node
+# needs a broker; remove it if you don't have one.
+nodes:
+  - id: upload
+    type: ApiInputNode
+    config:
+      uri: transcribe
+  - id: decode
+    type: AudioDecodeNode
+    config:
+      chunk_ms: 500         # stream long files block by block
+  - id: segments
+    type: AudioSegmentNode
+    config:
+      mode: silence
+      threshold_db: -40
+      min_silence_ms: 600
+      max_segment_s: 30
+  - id: speech16k
+    type: AudioResampleNode
+    config:
+      sample_rate: 16000
+      channels: 1
+  - id: stt
+    type: SpeechToTextNode
+    config:
+      backend: api
+      base_url: http://localhost:8000/v1
+      model: whisper-1
+      language: de
+  - id: transcript_file
+    type: FileOutputNode
+    config:
+      path: files/transcripts.txt
+  - id: mqtt
+    type: MQTTOutputNode
+    config:
+      broker: localhost
+      port: 1883
+      topic: pystreamflow/transcripts
+edges:
+  - {source: upload, target: decode}
+  - {source: decode, target: segments}
+  - {source: segments, target: speech16k}
+  - {source: speech16k, target: stt}
+  - {source: stt, target: transcript_file}
+  - {source: stt, target: mqtt}

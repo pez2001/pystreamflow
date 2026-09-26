@@ -39,9 +39,12 @@ If `PSF_MCP_API_KEY` is set, configure it as the client's access token/bearer to
 **A `421 Misdirected Request` on any `/mcp/*` request** means the underlying MCP SDK rejected the request's `Host` header before it ever reached this app's own auth check - this happens for any client connecting via a real LAN hostname (e.g. `mcp.lan`) or a reverse-proxy hostname, rather than `127.0.0.1`/`localhost`. By default this server disables the SDK's DNS-rebinding Host-header check entirely (it already has its own separate key-based auth via `PSF_MCP_API_KEY`, and every other route this project serves is reachable by any hostname too), so a stock deployment should never see a 421. If you've explicitly set `PSF_MCP_ALLOWED_HOSTS` to re-enable that check, a 421 means the hostname your client actually sent isn't in that comma-separated list - add it (matching host:port exactly) and restart.
 
 ## MCP Tools
+**Media.** `get_node_last` and the reflection tools never return raw media: an image/audio/video item appears as a summary (`$media`, `mime`, `size`, `meta`, `ref`, `preview_url`). To actually look at one, call `get_media` with that `ref` (or the `preview_url`), or with a `node_id` for that node's newest media item - images (including video frames) come back as image content, shrunk to `max_side` (default 1024) to save tokens, audio as audio content. To feed media in, `send_to_node` accepts `{"$media": {"path": "files/x.jpg"}}` (only under the files/data directories or `PSF_MCP_MEDIA_ROOTS`), `{"$media": {"base64": "...", "mime": "image/png"}}` or `{"$media": {"ref": "..."}}`.
+
 The tool set below is available three ways: over either real MCP transport above (for a real MCP client), or as a plain REST convenience endpoint at `POST /mcp/call` with a JSON body of `{"tool": "<name>", "arguments": {...}}` (not JSON-RPC - just `{"tool", "arguments"}` in, and either `{"result": ...}` or `{"error": ...}` back), which is the simpler option for a script or an HTTP-only agent that doesn't want to speak the full MCP protocol. Grouped by what the tools do:
 * **Info**: `get_version`, `list_nodes`, `get_node_last`, `get_node_stats`, `get_node_config`
 * **Inject / configure**: `send_to_node`, `update_node_config`
+* **Media**: `get_media`
 * **Node control**: `node_start`, `node_stop`, `node_pause`, `node_step`, `node_emit`, `node_reset`
 * **Reflection**: `reflect_nodes`, `reflect_node`, `reflect_graph`
 * **Graph editing**: `create_node`, `delete_node`, `connect_nodes`, `disconnect_nodes`

@@ -128,6 +128,77 @@ FIELD_OVERRIDES["TriggerToggleNode"].update({
 del FIELD_OVERRIDES["TriggerToggleNode"]["action"]
 
 
+# Media plan phase 2 - verified against media_file_input.py,
+# input_directory.py and base64_decode_node.py (each validates these
+# values in init()).
+FIELD_OVERRIDES["MediaFileInputNode"] = {
+    "emit_on": {"kind": "enum", "options": ["change", "start"]},
+}
+FIELD_OVERRIDES["DirectoryInputNode"] = {
+    "emit_as": {"kind": "enum", "options": ["path", "media"]},
+}
+FIELD_OVERRIDES["Base64DecodeNode"] = {
+    "output": {"kind": "enum", "options": ["auto", "text", "bytes", "media"]},
+}
+
+
+# Media plan phase 3 - verified against nodes/image_nodes.py (each value
+# is validated in that node's configure()).
+FIELD_OVERRIDES["ImageResizeNode"] = {
+    "resample": {"kind": "enum", "options": ["lanczos", "bicubic", "bilinear", "nearest"]},
+}
+FIELD_OVERRIDES["ImageFlipNode"] = {
+    "direction": {"kind": "enum", "options": ["horizontal", "vertical", "both"]},
+}
+FIELD_OVERRIDES["ImageConvertNode"] = {
+    "format": {"kind": "enum", "options": ["keep", "png", "jpeg", "webp", "gif", "bmp", "tiff"]},
+    "mode": {"kind": "enum", "options": ["keep", "RGB", "RGBA", "L"]},
+}
+FIELD_OVERRIDES["ImageFilterNode"] = {
+    "filter": {"kind": "enum", "options": [
+        "none", "blur", "gaussian_blur", "box_blur", "sharpen", "unsharp_mask",
+        "edges", "edge_enhance", "contour", "emboss", "smooth", "detail",
+    ]},
+}
+FIELD_OVERRIDES["ImageThumbnailNode"] = {
+    "format": {"kind": "enum", "options": ["webp", "jpeg", "png"]},
+}
+
+
+# Media plan phase 4 - verified against nodes/audio_nodes.py and
+# nodes/speech_to_text.py (validated in init()/configure()).
+FIELD_OVERRIDES["AudioEncodeNode"] = {
+    "format": {"kind": "enum", "options": ["wav", "flac", "ogg", "mp3", "m4a", "opus"]},
+}
+FIELD_OVERRIDES["AudioSegmentNode"] = {
+    "mode": {"kind": "enum", "options": ["silence", "time"]},
+}
+FIELD_OVERRIDES["AudioNormalizeNode"] = {
+    "mode": {"kind": "enum", "options": ["peak", "rms"]},
+}
+FIELD_OVERRIDES["SpeechToTextNode"] = {
+    "backend": {"kind": "enum", "options": ["api", "local"]},
+    "device": {"kind": "enum", "options": ["auto", "cpu", "cuda"]},
+}
+
+
+# Media plan phase 5 - verified against nodes/video_nodes.py.
+_VIDEO_BACKEND = {"kind": "enum", "options": ["auto", "pyav", "ffmpeg"]}
+FIELD_OVERRIDES["VideoDecodeNode"] = {
+    "frame_format": {"kind": "enum", "options": ["jpeg", "png"]},
+    "backend": _VIDEO_BACKEND,
+}
+FIELD_OVERRIDES["VideoFrameSampleNode"] = {
+    "mode": {"kind": "enum", "options": ["every_n", "fps", "keyframes"]},
+}
+FIELD_OVERRIDES["VideoEncodeNode"] = {
+    "format": {"kind": "enum", "options": ["mp4", "webm"]},
+    "backend": _VIDEO_BACKEND,
+}
+FIELD_OVERRIDES["VideoInfoNode"] = {"backend": _VIDEO_BACKEND}
+FIELD_OVERRIDES["VideoThumbnailNode"] = {"backend": _VIDEO_BACKEND}
+
+
 def get_field_schema(type_name: str) -> dict[str, dict]:
     """Field-level overrides for one node type, global ones first so a
     type-specific override (none currently collide, but future ones

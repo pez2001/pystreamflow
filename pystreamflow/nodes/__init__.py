@@ -1,5 +1,8 @@
 from .input_file import FileInputNode
 from .input_directory import DirectoryInputNode
+from .media_file_input import MediaFileInputNode
+from .media_file_output import MediaFileOutputNode
+from .speech_to_text import SpeechToTextNode
 from .input_web import WebInputNode
 from .input_api import ApiInputNode
 from .output_api import ApiOutputNode
@@ -96,6 +99,7 @@ __all__ = [
     "FileInputNode","DirectoryInputNode","WebInputNode","ApiInputNode","ApiOutputNode","LMStudioNode",
     "StackNode","FIFOQueueNode","LIFOQueueNode","ClockNode",
     "HTMLScraperNode",
+    "MediaFileInputNode","MediaFileOutputNode","SpeechToTextNode",
     "Base64DecodeNode",
     "Base64EncodeNode",
     "UserPromptNode",
@@ -118,3 +122,53 @@ __all__ = [
     "ListStringsNode","DisplayNode","TableNode",
     "ConstantValueNode",
 ]
+
+# Node types whose optional dependency (media plan phase 3: the
+# `pystreamflow[image]` extra, i.e. Pillow) isn't installed. They are not
+# in __all__ - so not in the registry and not creatable - and
+# GET /node-availability reports them with an install hint so the editor
+# can grey them out instead of offering nodes that can't run.
+IMAGE_NODE_TYPES = (
+    "ImageDecodeNode", "ImageResizeNode", "ImageCropNode", "ImageRotateNode", "ImageFlipNode",
+    "ImageConvertNode", "ImageFilterNode", "ImageInfoNode", "ImageThumbnailNode",
+)
+UNAVAILABLE_NODE_TYPES: dict[str, str] = {}
+try:
+    from . import image_nodes as _image_nodes
+except ImportError as _e:  # Pillow missing
+    for _name in IMAGE_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = f"needs Pillow: pip install 'pystreamflow[image]' ({_e})"
+else:
+    for _name in IMAGE_NODE_TYPES:
+        globals()[_name] = getattr(_image_nodes, _name)
+    __all__ += list(IMAGE_NODE_TYPES)
+
+# Media plan phase 4: the `pystreamflow[audio]` extra (numpy + soundfile).
+AUDIO_NODE_TYPES = (
+    "AudioDecodeNode", "AudioEncodeNode", "AudioResampleNode", "AudioGainNode",
+    "AudioNormalizeNode", "AudioLevelNode", "AudioSegmentNode",
+)
+try:
+    from . import audio_nodes as _audio_nodes
+except (ImportError, OSError) as _e:  # numpy/soundfile missing, or no libsndfile
+    for _name in AUDIO_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = f"needs numpy + soundfile: pip install 'pystreamflow[audio]' ({_e})"
+else:
+    for _name in AUDIO_NODE_TYPES:
+        globals()[_name] = getattr(_audio_nodes, _name)
+    __all__ += list(AUDIO_NODE_TYPES)
+
+# Media plan phase 5: video needs PyAV (`pystreamflow[video]`) or, as a
+# fallback, the ffmpeg executable - the module itself imports without
+# either, so availability is checked explicitly.
+VIDEO_NODE_TYPES = (
+    "VideoDecodeNode", "VideoFrameSampleNode", "VideoEncodeNode", "VideoInfoNode", "VideoThumbnailNode",
+)
+from . import video_nodes as _video_nodes  # noqa: E402
+if _video_nodes.available():
+    for _name in VIDEO_NODE_TYPES:
+        globals()[_name] = getattr(_video_nodes, _name)
+    __all__ += list(VIDEO_NODE_TYPES)
+else:
+    for _name in VIDEO_NODE_TYPES:
+        UNAVAILABLE_NODE_TYPES[_name] = "needs PyAV (pip install 'pystreamflow[video]') or the ffmpeg executable"

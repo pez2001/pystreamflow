@@ -10,6 +10,7 @@ Python based modern node graph editor for stream flow routing.
 - Multi WebInput nodes
 - LM Studio LLM integration
 - Docker production deployment
+- Images, audio and video: file/upload/stream input, image, audio and video nodes, speech-to-text, vision via LM Studio (`pip install 'pystreamflow[media]'` or the `runtime-media` Docker image - see the user guide)
 
 ## Quick Start
 ```bash

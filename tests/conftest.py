@@ -38,6 +38,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 import httpx
@@ -45,6 +46,9 @@ import pytest
 
 TEST_API_KEY = "test-api-key-for-pytest"
 os.environ.setdefault("PSF_API_KEY", TEST_API_KEY)
+# Media blob store (core/blob_store.py) in a throwaway directory, so the
+# test run never writes blobs into the repo's own ./data.
+os.environ.setdefault("PSF_BLOB_DIR", tempfile.mkdtemp(prefix="psf-test-blobs-"))
 
 
 def _spawn_live_mcp_server(extra_env=None):

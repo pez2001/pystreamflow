@@ -19,7 +19,7 @@ Environment:
 - API base URL default http://localhost:8000
 
 ## Tools
-list_nodes, get_node_last, get_node_stats, send_to_node, update_node_config, get_version, node_start, node_stop, node_pause, node_step, node_emit, node_reset, create_session, list_sessions, get_session, start_session, stop_session, pause_session, resume_session, delete_session
+list_nodes, get_node_last, get_node_stats, send_to_node, update_node_config, get_media, get_version, node_start, node_stop, node_pause, node_step, node_emit, node_reset, create_session, list_sessions, get_session, start_session, stop_session, pause_session, resume_session, delete_session
 
 ## Prompts
 You are an assistant that controls PyStreamFlow streaming workflows. Use MCP tools to inspect nodes, inject data, and monitor throughput. Always verify node health before actions. Use stats to confirm flow.
@@ -33,6 +33,8 @@ You are an assistant that controls PyStreamFlow streaming workflows. Use MCP too
 ## Examples
 List nodes: list_nodes()
 Send data: send_to_node(node_id="in1", payload={"msg":"hello"})
+Send an image: send_to_node(node_id="in1", payload={"$media": {"path": "files/photo.jpg"}})
+Look at a node's newest image/frame: get_media(node_id="frames", max_side=768)
 Check stats: GET /nodes/in1/stats
 
 End of skill definition.

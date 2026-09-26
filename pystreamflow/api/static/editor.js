@@ -127,9 +127,13 @@
       Promise.all([
         fetchJSON('/node-schema').catch(() => null),
         fetchJSON('/config-schema').catch(() => null),
-      ]).then(([ps, cs]) => {
+        fetchJSON('/node-availability').catch(() => null),
+        fetchJSON('/port-dtypes').catch(() => null),
+      ]).then(([ps, cs, av, pd]) => {
+        if (pd && pd.types) portDtypes = pd.types;
         if (ps) portSchema = ps;
         if (cs) configSchema = cs;
+        if (av && av.unavailable) { unavailableTypes = av.unavailable; buildPalette(); }
         toast(ps && cs ? 'API key saved.' : 'API key saved, but the node schema still failed to load - check the key and reload.');
       });
     };
@@ -263,15 +267,63 @@
     // Feature request: "add a node to post data to external webservers" -
     // see pystreamflow/nodes/http_post_node.py.
     HttpPost: { type: 'HttpPostNode', label: 'HTTP Post', icon: '📤' },
+    MediaFileInput: { type: 'MediaFileInputNode', label: 'Media File Input', icon: '🖼️' },
+    MediaFileOutput: { type: 'MediaFileOutputNode', label: 'Media File Output', icon: '🗂️' },
+    ImageDecode: { type: 'ImageDecodeNode', label: 'Image Decode', icon: '🖼️' },
+    ImageResize: { type: 'ImageResizeNode', label: 'Image Resize', icon: '↔️' },
+    ImageCrop: { type: 'ImageCropNode', label: 'Image Crop', icon: '✂️' },
+    ImageRotate: { type: 'ImageRotateNode', label: 'Image Rotate', icon: '🔄' },
+    ImageFlip: { type: 'ImageFlipNode', label: 'Image Flip', icon: '🪞' },
+    ImageConvert: { type: 'ImageConvertNode', label: 'Image Convert', icon: '🔁' },
+    ImageFilter: { type: 'ImageFilterNode', label: 'Image Filter', icon: '🎚️' },
+    ImageInfo: { type: 'ImageInfoNode', label: 'Image Info', icon: 'ℹ️' },
+    ImageThumbnail: { type: 'ImageThumbnailNode', label: 'Image Thumbnail', icon: '🔳' },
+    AudioDecode: { type: 'AudioDecodeNode', label: 'Audio Decode', icon: '🎵' },
+    AudioEncode: { type: 'AudioEncodeNode', label: 'Audio Encode', icon: '💿' },
+    AudioResample: { type: 'AudioResampleNode', label: 'Audio Resample', icon: '🎛️' },
+    AudioGain: { type: 'AudioGainNode', label: 'Audio Gain', icon: '🔊' },
+    AudioNormalize: { type: 'AudioNormalizeNode', label: 'Audio Normalize', icon: '📶' },
+    AudioLevel: { type: 'AudioLevelNode', label: 'Audio Level', icon: '📊' },
+    AudioSegment: { type: 'AudioSegmentNode', label: 'Audio Segment', icon: '✂️' },
+    SpeechToText: { type: 'SpeechToTextNode', label: 'Speech to Text', icon: '🗣️' },
+    VideoDecode: { type: 'VideoDecodeNode', label: 'Video Decode', icon: '🎞️' },
+    VideoFrameSample: { type: 'VideoFrameSampleNode', label: 'Video Frame Sample', icon: '⏱️' },
+    VideoEncode: { type: 'VideoEncodeNode', label: 'Video Encode', icon: '📼' },
+    VideoInfo: { type: 'VideoInfoNode', label: 'Video Info', icon: 'ℹ️' },
+    VideoThumbnail: { type: 'VideoThumbnailNode', label: 'Video Thumbnail', icon: '🖼️' },
   };
   const nodeDocs = {
-    WebInputNode: { desc: 'HTTP input via shared web server', url: '/docs/nodes/index.md#webinputnode' },
-    ApiInputNode: { desc: 'REST input: uri maps to a real POST endpoint at /api/<uri> on the shared web server; emits each request\'s JSON body', url: '/docs/nodes/index.md#apiinputnode' },
-    ApiOutputNode: { desc: 'REST output: uri maps to /api/<uri> (JSON) plus /api/<uri>/raw (same data, unencapsulated) on the shared web server; starts the server itself. Also has a graph-level "raw" output port (⇢ raw), wireable on the canvas, alongside the normal "out" port.', url: '/docs/nodes/index.md#apioutputnode' },
+    WebInputNode: { desc: 'HTTP input via shared web server: a JSON object body is emitted as-is, a file upload (multipart/form-data, or a raw image/audio/video/octet-stream body) as one media item per file', url: '/docs/nodes/index.md#webinputnode' },
+    ApiInputNode: { desc: 'REST input: uri maps to a real POST endpoint at /api/<uri> on the shared web server; emits each request\'s JSON body, or one media item per uploaded file (multipart/form-data or a raw image/audio/video/octet-stream body)', url: '/docs/nodes/index.md#apiinputnode' },
+    ApiOutputNode: { desc: 'REST output: uri maps to /api/<uri> (JSON) plus /api/<uri>/raw (same data, unencapsulated; a media item is served as the file itself) and /api/<uri>/media (newest media item) on the shared web server; starts the server itself. Also has a graph-level "raw" output port (⇢ raw), wireable on the canvas, alongside the normal "out" port.', url: '/docs/nodes/index.md#apioutputnode' },
     FileInputNode: { desc: 'Poll file for new bytes', url: '/docs/nodes/index.md' },
-    DirectoryInputNode: { desc: 'Watches a directory (path, optional recursive) and emits new files on `files`, new subdirectories on `dirs`', url: '/docs/nodes/index.md' },
+    DirectoryInputNode: { desc: 'Watches a directory (path, optional recursive) and emits new files on `files`, new subdirectories on `dirs`. Optional `extensions`/`media_only` filter; `emit_as: media` emits whole files as media items instead of paths', url: '/docs/nodes/index.md' },
+    MediaFileInputNode: { desc: 'Reads one image/audio/video file as a whole and emits it as a media item (emit_on: change = on start and whenever the file changes, start = once)', url: '/docs/nodes/index.md#media-nodes' },
+    MediaFileOutputNode: { desc: 'Writes each item to its own file (path_pattern with {node} {index:05d} {ext} {kind} {stem} {timestamp}; default "<files_dir>/media/{node}_{index:05d}.{ext}") and emits {path, mime, size}', url: '/docs/nodes/index.md#media-nodes' },
     JSONInputNode: { desc: 'Reads newline-delimited JSON from a real source (source: "stdin", the default, or a file path to tail) and emits each parsed value', url: '/docs/nodes/index.md' },
-    LMStudioNode: { desc: 'LM Studio OpenAI compatible LLM', url: '/docs/nodes/index.md' },
+    LMStudioNode: { desc: 'LM Studio OpenAI compatible LLM. Images on `in` are sent to vision models; the question comes from the `prompt` input port or image_prompt', url: '/docs/nodes/index.md' },
+    ImageDecodeNode: { desc: 'Checks an item is a decodable image and fills in width/height/mode/format (auto_orient: rotate photos upright by EXIF)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageResizeNode: { desc: 'Scale to max_side, or width/height (fit inside with keep_aspect); resample nearest|bilinear|bicubic|lanczos; never enlarges unless upscale', url: '/docs/nodes/index.md#image-nodes' },
+    ImageCropNode: { desc: 'Cut out width x height at x/y, or centered (center: true)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageRotateNode: { desc: 'Rotate by angle degrees counter-clockwise (exif = upright by EXIF tag)', url: '/docs/nodes/index.md#image-nodes' },
+    ImageFlipNode: { desc: 'Mirror horizontally, vertically or both', url: '/docs/nodes/index.md#image-nodes' },
+    ImageConvertNode: { desc: 'Re-encode as png/jpeg/webp/gif/bmp/tiff with quality; mode RGB/RGBA/L', url: '/docs/nodes/index.md#image-nodes' },
+    ImageFilterNode: { desc: 'Blur, sharpen, edges, ... plus brightness/contrast/saturation/sharpness factors', url: '/docs/nodes/index.md#image-nodes' },
+    ImageInfoNode: { desc: 'Emits a dict with size, dimensions, mode, format, alpha and EXIF - for logic/compare/JSON nodes', url: '/docs/nodes/index.md#image-nodes' },
+    ImageThumbnailNode: { desc: 'Small preview (max_side, default 256) as WebP/JPEG/PNG', url: '/docs/nodes/index.md#image-nodes' },
+    AudioDecodeNode: { desc: 'Audio file (or a video\'s audio track) to PCM: whole clip, or audio_chunk items of chunk_ms with pts', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioEncodeNode: { desc: 'Collects audio into wav/flac/ogg/mp3 (m4a/opus via ffmpeg) files - per segment_s, on the flush port, at a stream\'s last chunk or after flush_idle_s', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioResampleNode: { desc: 'Change sample_rate (e.g. 16000 for speech recognition) and/or channels (1 = mono)', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioGainNode: { desc: 'Change the level by gain_db', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioNormalizeNode: { desc: 'Scale each item to a peak or rms target_db (gain limited by max_gain_db)', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioLevelNode: { desc: 'RMS/peak level per item or chunk: dict on out, bare dB numbers on rms_db/peak_db (for Compare/TriggerThreshold)', url: '/docs/nodes/index.md#audio-nodes' },
+    AudioSegmentNode: { desc: 'Cuts a stream into segments at silence (threshold_db, min_silence_ms) or every segment_s', url: '/docs/nodes/index.md#audio-nodes' },
+    SpeechToTextNode: { desc: 'Transcribes audio to text: backend api (OpenAI-compatible /audio/transcriptions) or local (faster-whisper)', url: '/docs/nodes/index.md#audio-nodes' },
+    VideoDecodeNode: { desc: 'Video item or source (file path / rtsp:// / http:// URL) to video_frame images (JPEG/PNG) with pts; fps and max_side to sample and shrink; audio track on the audio port (PyAV)', url: '/docs/nodes/index.md#video-nodes' },
+    VideoFrameSampleNode: { desc: 'Keep every n-th frame, at most fps frames per second, or only keyframes', url: '/docs/nodes/index.md#video-nodes' },
+    VideoEncodeNode: { desc: 'Frames (+ audio port) to an mp4 (H.264/AAC) or webm (VP9/Opus) video - per segment_s, on flush, at the last frame or after flush_idle_s', url: '/docs/nodes/index.md#video-nodes' },
+    VideoInfoNode: { desc: 'Duration, codecs, resolution, fps, frames, audio format of a video item', url: '/docs/nodes/index.md#video-nodes' },
+    VideoThumbnailNode: { desc: 'One frame at at_s seconds (or at_percent) as a JPEG image', url: '/docs/nodes/index.md#video-nodes' },
     ScriptInputNode: { desc: 'Periodic script execution input', url: '/docs/nodes/index.md#scriptinput' },
     FileOutputNode: { desc: 'Really appends each item to a real file on disk (path, default "<files_dir>/output.txt" - PSF_FILES_DIR, /app/files under docker-compose.yml)', url: '/docs/nodes/index.md' },
     LogOutputNode: { desc: 'Logs each item via Python logging AND to a real log file (file, default "<logs_dir>/pystreamflow.log" - PSF_LOGS_DIR, /app/logs under docker-compose.yml)', url: '/docs/nodes/index.md' },
@@ -308,8 +360,8 @@
     LIFOQueueNode: { desc: 'Last-in-first-out queue', url: '/docs/nodes/index.md#lifo' },
     ClockNode: { desc: 'CPU-style ticking emitter', url: '/docs/nodes/index.md#clock' },
     HTMLScraperNode: { desc: 'Extract data from HTML with CSS selectors or regex', url: '/docs/nodes/index.md#htmlscraper' },
-    Base64DecodeNode: { desc: 'Decode base64 encoded strings to text/bytes', url: '/docs/nodes/index.md#base64decode' },
-    Base64EncodeNode: { desc: 'Encode text/bytes to base64 string', url: '/docs/nodes/index.md#base64encode' },
+    Base64DecodeNode: { desc: 'Decode base64 encoded strings to text/bytes; a data: URL becomes a media item (output: auto|text|bytes|media)', url: '/docs/nodes/index.md#base64decode' },
+    Base64EncodeNode: { desc: 'Encode text/bytes/media items to a base64 string (data_url: true for data:<mime>;base64,...)', url: '/docs/nodes/index.md#base64encode' },
     UserPromptNode: { desc: 'Pause flow and wait for user input via user port', url: '/docs/nodes/index.md#userprompt' },
     RollingWindowBufferNode: { desc: 'Rolling window history buffer with triggerable flush', url: '/docs/nodes/index.md#rollingwindowbuffer' },
     ConstantValueNode: { desc: 'Emits one configured literal value with no metadata wrapper - the clean raw-value source for attribute wiring', url: '/docs/nodes/index.md#constantvalue' },
@@ -342,6 +394,7 @@
     Text: ['TextUpper', 'TextLower', 'TextTrim', 'TextReplace', 'TextSubstring', 'TextReverse', 'TextTitle', 'TextStrip', 'TextSplit', 'TextJoin'],
     'Line/Token': ['LineSplitter', 'Tokenizer', 'LineBuffer', 'TrimString', 'ListStrings', 'Table'],
     Control: ['Timer', 'Trigger', 'TimerTrigger', 'TriggerOn', 'TriggerOff', 'TriggerPause', 'TriggerIf', 'TriggerThreshold', 'TriggerDebounce', 'TriggerPulse', 'TriggerToggle', 'Cron'],
+    Media: ['MediaFileInput', 'MediaFileOutput', 'ImageDecode', 'ImageResize', 'ImageCrop', 'ImageRotate', 'ImageFlip', 'ImageConvert', 'ImageFilter', 'ImageInfo', 'ImageThumbnail', 'AudioDecode', 'AudioEncode', 'AudioResample', 'AudioGain', 'AudioNormalize', 'AudioLevel', 'AudioSegment', 'SpeechToText', 'VideoDecode', 'VideoFrameSample', 'VideoEncode', 'VideoInfo', 'VideoThumbnail'],
     Advanced: ['Subgraph', 'Stack', 'FIFOQueue', 'LIFOQueue', 'Clock', 'HTMLScraper', 'Base64Decode', 'Base64Encode', 'UserPrompt', 'RollingWindowBuffer', 'SyncBarrier', 'QueueGate'],
   };
 
@@ -389,6 +442,49 @@
   // (its own separate, untouched fan-out-multiplicity mechanism - see
   // psfPairedRawOutputs below) still matches this same pattern too.
   const RAW_PORT_COLOR = KIND_COLORS.raw;
+  // Media plan phase 6b: port data types (GET /port-dtypes,
+  // core/port_schema.py). A port's dot is coloured by its dtype; "any"
+  // ports keep the default look. Purely advisory - a mismatched wire still
+  // connects, it is just drawn in DTYPE_WARN_COLOR and a toast explains why.
+  // Hues picked to stay apart from the edge-kind colours above (attribute
+  // purple, control amber) that other slots already use.
+  const DTYPE_COLORS = {
+    text: '#e2e8f0', number: '#4ade80', json: '#fb923c',
+    image: '#22d3ee', audio: '#f472b6', video: '#facc15', media: '#818cf8',
+  };
+  const DTYPE_WARN_COLOR = '#ef4444';
+  const MEDIA_DTYPES = new Set(['image', 'audio', 'video', 'media']);
+  let portDtypes = {};
+
+  // Mirror of core/port_schema.py's dtype_warning() - keep the two in sync.
+  function dtypeWarning(src, tgt) {
+    src = src || 'any'; tgt = tgt || 'any';
+    if (src === 'any' || tgt === 'any' || src === tgt) return null;
+    const sMedia = MEDIA_DTYPES.has(src), tMedia = MEDIA_DTYPES.has(tgt);
+    if (sMedia && tMedia) return (src === 'media' || tgt === 'media') ? null : `${src} output into ${tgt} input`;
+    if (sMedia || tMedia) return `${src} output into ${tgt} input (media vs. plain values)`;
+    if (tgt === 'text' || (src === 'number' && tgt === 'json')) return null;
+    return `${src} output into ${tgt} input`;
+  }
+
+  function dtypeSlotExtra(dtype) {
+    if (!dtype || dtype === 'any' || !DTYPE_COLORS[dtype]) return undefined;
+    return { color_on: DTYPE_COLORS[dtype], color_off: DTYPE_COLORS[dtype], psfDtype: dtype };
+  }
+
+  // Colour for a link: its edge kind, or the warning colour when a data
+  // wire joins ports of incompatible dtypes.
+  function linkColor(link) {
+    const kind = link.psfKind || 'data';
+    const base = KIND_COLORS[kind] || KIND_COLORS.data;
+    if (kind !== 'data' && kind !== 'raw' && kind !== 'endpoint') return base;
+    const src = graph && graph.getNodeById(link.origin_id);
+    const tgt = graph && graph.getNodeById(link.target_id);
+    const out = src && src.outputs && src.outputs[link.origin_slot];
+    const inp = tgt && tgt.inputs && tgt.inputs[link.target_slot];
+    link.psfDtypeWarning = dtypeWarning(out && out.psfDtype, inp && inp.psfDtype);
+    return link.psfDtypeWarning ? DTYPE_WARN_COLOR : base;
+  }
   const RAW_PORT_RE = /^raw(_\w+|\d*)$/;
   // Feature flag, now scoped to exactly one thing: whether ForkNode's own
   // separate outN/rawN pairing (psfPairedRawOutputs below - a *different*
@@ -426,6 +522,9 @@
   // Global editor state
   // ------------------------------------------------------------------
   let portSchema = {};
+  // Node types this server can't run (optional dependency missing, e.g.
+  // Pillow for the image nodes) -> install hint; see GET /node-availability.
+  let unavailableTypes = {};
   let configSchema = {};
   let nodeTemplates = {};
   try { nodeTemplates = JSON.parse(localStorage.getItem('psf_node_templates') || '{}'); } catch (e) { nodeTemplates = {}; }
@@ -663,6 +762,134 @@
     } catch (e) { /* nothing more we can do - clipboard access just isn't available here */ }
   }
 
+  // ------------------------------------------------------------------
+  // Tile preview (media plan phase 6): a thumbnail of the newest image or
+  // video frame a node emitted, drawn at the bottom of the node itself.
+  // Fed by pollNodeStatus() (the same /last poll that drives the status
+  // dot) through updateTilePreview(); the image is fetched through the
+  // auth-aware fetchMediaUrl() like the live-view previews. Per node it can
+  // be switched off from the context menu; that choice is stored as the
+  // editor-only config key `_preview: false`, so it survives Run, Export
+  // and Import (the backend ignores `_` keys).
+  // ------------------------------------------------------------------
+  const TILE_PREVIEW_H = 110;
+
+  function tilePreviewEnabled(node) {
+    return !(node.properties && node.properties._preview === false);
+  }
+
+  function addTilePreviewWidget(node) {
+    const w = node.addWidget('psf_tile_preview', 'preview', '', () => {});
+    w.computeSize = function (width) {
+      return [width, node._tilePreview && tilePreviewEnabled(node) ? TILE_PREVIEW_H : 0];
+    };
+    w.draw = function (ctx, n, width, y) {
+      const p = n._tilePreview;
+      if (!p || !tilePreviewEnabled(n)) return;
+      const pad = 8;
+      const boxW = width - pad * 2;
+      const boxH = TILE_PREVIEW_H - 8;
+      ctx.save();
+      ctx.fillStyle = '#020617';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(pad, y, boxW, boxH, [6]);
+      else ctx.rect(pad, y, boxW, boxH);
+      ctx.fill();
+      ctx.clip();
+      const img = p.img;
+      const scale = Math.min(boxW / img.width, (boxH - 14) / img.height); // fit, keep aspect
+      const dw = img.width * scale;
+      const dh = img.height * scale;
+      ctx.drawImage(img, pad + (boxW - dw) / 2, y + 2 + (boxH - 14 - dh) / 2, dw, dh);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(p.caption, pad + 6, y + boxH - 4);
+      ctx.restore();
+    };
+    return w;
+  }
+
+  // Grow/shrink a node by however much its own computeSize() changed - not
+  // a full setSize(computeSize()), which would undo a manual resize (and
+  // DisplayNode's live view sizes itself off its height, see its baseline).
+  function resizeForTilePreview(node, apply) {
+    const before = node.computeSize()[1];
+    apply();
+    const delta = node.computeSize()[1] - before;
+    if (!delta) return;
+    node.size[1] += delta;
+    if (node._displayLiveViewBaseHeight != null) node._displayLiveViewBaseHeight += delta;
+    if (delta > 0) pushDownNodesBelow(node);
+    if (graphcanvas) graphcanvas.setDirty(true, true);
+  }
+
+  // After `node` grew taller, move every node that now overlaps it from
+  // below just far enough down to keep NODE_GAP between them - and, in
+  // turn, whatever those moved nodes now overlap. Nodes that still fit
+  // aren't touched, and nothing is ever pulled back up when a tile
+  // shrinks, so a layout only changes where it has to.
+  const NODE_GAP = 12;
+
+  function nodeTop(n) {
+    return n.pos[1] - (LiteGraph.NODE_TITLE_HEIGHT || 30); // pos is the body; the title bar sits above it
+  }
+
+  function nodeBottom(n) {
+    return (n.flags && n.flags.collapsed) ? n.pos[1] : n.pos[1] + n.size[1];
+  }
+
+  function pushDownNodesBelow(node) {
+    if (!graph) return;
+    // Nodes only ever move down and are only pushed by nodes above them,
+    // so this settles; the step cap is just a guard.
+    const queue = [node];
+    let steps = 0;
+    while (queue.length && steps++ < 10000) {
+      const upper = queue.shift();
+      const left = upper.pos[0];
+      const right = upper.pos[0] + upper.size[0];
+      const limit = nodeBottom(upper) + NODE_GAP;
+      graph._nodes
+        .filter((n) => n !== upper && n.pos[1] >= upper.pos[1]
+          && n.pos[0] < right && n.pos[0] + n.size[0] > left
+          && nodeTop(n) < limit)
+        .sort((a, b) => a.pos[1] - b.pos[1])
+        .forEach((n) => {
+          n.pos[1] += limit - nodeTop(n);
+          queue.push(n); // its own neighbours below may overlap now
+        });
+    }
+  }
+
+  function updateTilePreview(node, entry) {
+    if (!entry) return;
+    const media = findMediaItems([entry]).find((m) => String(m.mime || '').startsWith('image/'));
+    if (!media || !tilePreviewEnabled(node) || node._tilePreviewRef === media.ref) return;
+    node._tilePreviewRef = media.ref;
+    fetchMediaUrl(media.preview_url).then((url) => {
+      if (!url || node._tilePreviewRef !== media.ref) return;
+      const img = new Image();
+      img.onload = () => {
+        if (node._tilePreviewRef !== media.ref) return;
+        const meta = media.meta || {};
+        const caption = [meta.width && meta.height ? `${meta.width}×${meta.height}` : '',
+          meta.pts != null ? `pts ${Number(meta.pts).toFixed(2)} s` : (meta.filename || '')].filter(Boolean).join(' · ');
+        resizeForTilePreview(node, () => { node._tilePreview = { img, caption }; });
+      };
+      img.src = url;
+    });
+  }
+
+  function setTilePreviewEnabled(node, enabled) {
+    resizeForTilePreview(node, () => {
+      if (!node.properties) node.properties = {};
+      if (enabled) delete node.properties._preview;
+      else node.properties._preview = false;
+    });
+    if (enabled) node._tilePreviewRef = null; // pick up the latest image on the next poll
+  }
+
   function addWidgetsForNode(node) {
     node.widgets = [];
     // Feature request: "add a really nice visually looking realtime view
@@ -804,6 +1031,9 @@
     }
     const cfg = node.properties || {};
     Object.keys(cfg).forEach((key) => {
+      // `_`-prefixed keys are editor-only settings (e.g. `_preview`, see
+      // the tile preview below), not node config to edit.
+      if (key.startsWith('_')) return;
       const value = cfg[key];
       const override = fieldOverride(node.psfType, key);
       if (override && override.kind === 'node_ref') {
@@ -1049,6 +1279,7 @@
         copyTextToClipboard(visible.join('\n'));
       });
     }
+    addTilePreviewWidget(node);
     node.size = node.computeSize();
     // Freezes "this node's natural total height, with the live view at
     // its own minimum" as a baseline the live view's own computeSize()
@@ -1252,7 +1483,8 @@
     // real, hand-declared 'raw' port - a genuine port name, not an
     // auto-duplicate - making it permanently unwireable from the editor;
     // that bug is what removing this filter fixes.
-    ins.forEach((name) => node.addInput(name, 0));
+    const dtypes = portDtypes[node.psfType] || { inputs: {}, outputs: {} };
+    ins.forEach((name) => node.addInput(name, 0, dtypeSlotExtra(dtypes.inputs[name])));
     const isTrigger = node.constructor && node.constructor.psfIsTrigger;
     outs.forEach((name) => {
       let extra;
@@ -1266,6 +1498,8 @@
         extra = { color_on: RAW_PORT_COLOR, color_off: RAW_PORT_COLOR, label: '⇢ ' + name };
       } else if (isTrigger) {
         extra = { color_on: KIND_COLORS.control, color_off: KIND_COLORS.control };
+      } else {
+        extra = dtypeSlotExtra(dtypes.outputs[name]);
       }
       node.addOutput(name, 0, extra);
     });
@@ -1342,8 +1576,32 @@
     // user needs to configure day to day.
     ApiInputNode: { uri: '' },
     FileInputNode: { path: '', poll_interval: 1.0 },
-    DirectoryInputNode: { path: '', recursive: false, poll_interval: 2.0 },
-    LMStudioNode: { base_url: 'http://localhost:1234/v1', model: 'local-model', api_key: 'lm-studio', system: '', timeout: 600 },
+    DirectoryInputNode: { path: '', recursive: false, poll_interval: 2.0, extensions: '', media_only: false, emit_as: 'path' },
+    MediaFileInputNode: { path: '', emit_on: 'change', poll_interval: 1.0 },
+    MediaFileOutputNode: { path_pattern: '', overwrite: false },
+    LMStudioNode: { base_url: 'http://localhost:1234/v1', model: 'local-model', api_key: 'lm-studio', system: '', timeout: 600, image_prompt: 'Describe this image.' },
+    ImageDecodeNode: { auto_orient: false },
+    ImageResizeNode: { max_side: 1024, width: '', height: '', keep_aspect: true, resample: 'lanczos', upscale: false },
+    ImageCropNode: { width: 512, height: 512, x: 0, y: 0, center: false },
+    ImageRotateNode: { angle: 90, expand: true, fill: '#000000' },
+    ImageFlipNode: { direction: 'horizontal' },
+    ImageConvertNode: { format: 'jpeg', quality: 85, mode: 'keep' },
+    ImageFilterNode: { filter: 'none', radius: 2, brightness: 1.0, contrast: 1.0, saturation: 1.0, sharpness: 1.0 },
+    ImageInfoNode: { exif: true },
+    ImageThumbnailNode: { max_side: 256, format: 'webp', quality: 80 },
+    AudioDecodeNode: { chunk_ms: 0 },
+    AudioEncodeNode: { format: 'wav', bitrate: '128k', segment_s: 0, flush_idle_s: 2.0 },
+    AudioResampleNode: { sample_rate: 16000, channels: 1 },
+    AudioGainNode: { gain_db: 0 },
+    AudioNormalizeNode: { mode: 'peak', target_db: -1, max_gain_db: 30 },
+    AudioLevelNode: { silence_db: -50 },
+    AudioSegmentNode: { mode: 'silence', threshold_db: -40, min_silence_ms: 500, pad_ms: 200, min_segment_s: 0.3, max_segment_s: 30, segment_s: 10, flush_idle_s: 2.0 },
+    VideoDecodeNode: { source: '', fps: 1, max_side: 1280, frame_format: 'jpeg', quality: 85, audio: false, audio_chunk_ms: 500, reconnect_s: 5, backend: 'auto' },
+    VideoFrameSampleNode: { mode: 'every_n', n: 5, fps: 1 },
+    VideoEncodeNode: { format: 'mp4', fps: '', crf: '', segment_s: 0, flush_idle_s: 2.0, audio_grace_s: 0.5, backend: 'auto' },
+    VideoInfoNode: { backend: 'auto' },
+    VideoThumbnailNode: { at_s: 1.0, at_percent: '', max_side: 0, quality: 85, backend: 'auto' },
+    SpeechToTextNode: { backend: 'api', base_url: 'http://localhost:8000/v1', model: 'whisper-1', api_key: '', language: '', prompt: '', timeout: 300 },
     ScriptInputNode: { script_path: '', interpreter: '', args: [], interval: 5.0, working_dir: '', timeout: 30.0, emit_mode: 'lines' },
     MQTTInputNode: { broker: 'localhost', port: 1883, topic: '#', client_id: '', username: '', password: '', qos: 0 },
     ConstantValueNode: { value: '', repeat: false, interval: 1.0 },
@@ -1446,8 +1704,8 @@
     LIFOQueueNode: { max_size: 1000 },
     ClockNode: { interval: 1.0, start_value: 0, count_up: true, reset_on_input: false },
     HTMLScraperNode: { extractors: [], output_key: 'scraped' },
-    Base64DecodeNode: { output_encoding: 'utf-8', strip_whitespace: true, validate_padding: true },
-    Base64EncodeNode: { input_encoding: 'utf-8', output_encoding: 'utf-8', urlsafe: false, add_newlines: false, line_length: 76 },
+    Base64DecodeNode: { output_encoding: 'utf-8', strip_whitespace: true, validate_padding: true, output: 'auto' },
+    Base64EncodeNode: { input_encoding: 'utf-8', output_encoding: 'utf-8', urlsafe: false, add_newlines: false, line_length: 76, data_url: false },
     UserPromptNode: { prompt: 'Enter value:', timeout: 300.0, default: '' },
     RollingWindowBufferNode: { max_size: 1000, retain_after_flush: true, emit_passthrough: true },
 
@@ -1583,7 +1841,8 @@
         toast(`That wire connected as '${kind}' instead of raw (target/source overrides it)`);
       }
       linkInfo.psfKind = kind;
-      linkInfo.color = KIND_COLORS[kind];
+      linkInfo.color = linkColor(linkInfo);
+      if (linkInfo.psfDtypeWarning) toast(`Type mismatch: ${linkInfo.psfDtypeWarning} - connected anyway`);
       syncWireToBackend('connect', srcNode, this, linkInfo, slot);
     };
 
@@ -1653,6 +1912,10 @@
         // do the same pointless thing on the same node.
         ...(keyGroup[this.psfKey] === 'Outputs' ? [] : [{ content: '➤ Manual emit', callback: () => manualEmitNode(this) }]),
         { content: '👁 Live view…', callback: () => openLiveModal(this) },
+        ...(this._tilePreview || !tilePreviewEnabled(this) ? [{
+          content: tilePreviewEnabled(this) ? '🖼 Hide preview on node' : '🖼 Show preview on node',
+          callback: () => setTilePreviewEnabled(this, !tilePreviewEnabled(this)),
+        }] : []),
         { content: '📋 Duplicate', callback: () => duplicatePsfNode(this) },
         { content: '💾 Save as template', callback: () => saveTemplate(this) },
         { content: '🧬 Advanced JSON…', callback: () => openAdvancedModal(this) },
@@ -2063,7 +2326,9 @@
   // previously-displayed node there would race with (and could destroy)
   // a session that's still genuinely running.
   function syncNodeDeleteToBackend(node) {
-    if (suppressNodeDeleteSync || !node || !node.psfId) return;
+    // A staged node (see createPsfNode()) has no backend instance of its
+    // own - a DELETE could only hit some unrelated node with the same id.
+    if (suppressNodeDeleteSync || !node || !node.psfId || node.psfStaged) return;
     fetch(`/nodes/${node.psfId}`, { method: 'DELETE' }).catch(() => {});
   }
 
@@ -2072,6 +2337,14 @@
   // drawn on the canvas, immediately, instead of only at "Run".
   function syncWireToBackend(action, srcNode, tgtNode, linkInfo, targetSlot) {
     if (suppressWireSync || !srcNode || !tgtNode || !srcNode.psfId || !tgtNode.psfId) return;
+    // Bug fix: a wire drawn between nodes that exist only on the canvas so
+    // far (staged by Import/Load Demo/ungroup/the subgraph editor - see
+    // createPsfNode()'s psfStaged) used to be POSTed to /nodes/connect,
+    // rejected with "source or target not found", and then torn back off
+    // the canvas - the wire the user just drew vanished. Such a wire is
+    // canvas-only until Run, which builds the whole graph, this wire
+    // included, from the canvas (graphToRunPayload()).
+    if (srcNode.psfStaged || tgtNode.psfStaged) return;
     const sourceSlot = srcNode.outputs && srcNode.outputs[linkInfo.origin_slot];
     const inputSlot = tgtNode.inputs && tgtNode.inputs[targetSlot];
     const body = {
@@ -2116,6 +2389,12 @@
     const key = nodeTypes[psfTypeOrKey] ? psfTypeOrKey : keyForType(psfTypeOrKey);
     if (!key) return null;
     const meta = nodeTypes[key];
+    // Media plan phase 3: the search box and pasted/duplicated nodes come
+    // through here too, not just the (greyed-out) palette button.
+    if (unavailableTypes[meta.type] && opts.syncBackend !== false) {
+      toast(`${meta.label}: ${unavailableTypes[meta.type]}`);
+      return null;
+    }
     // Bug fix (found while investigating why nodes rendered with no
     // config widgets at all - the concrete complaint behind "the MQTT
     // nodes need input fields to directly set host/user/pw/topic"):
@@ -2147,6 +2426,11 @@
     });
     if (!node) return null;
     if (opts.label) node.title = opts.label;
+    // Staged = on the canvas only, no backend instance yet (bulk loads
+    // pass syncBackend:false). Wires to it stay canvas-only until Run - see
+    // syncWireToBackend(). Load Session passes staged:false: that
+    // session's nodes already exist on the backend.
+    node.psfStaged = opts.syncBackend === false && opts.staged !== false;
     node.pos = [opts.x != null ? opts.x : 200 + Math.random() * 200, opts.y != null ? opts.y : 200 + Math.random() * 200];
     graph.add(node);
     if (opts.syncBackend !== false) syncNodeToBackend(node);
@@ -2211,7 +2495,8 @@
     };
   }
 
-  function loadWorkflowIntoGraph(nodesData, edgesData) {
+  function loadWorkflowIntoGraph(nodesData, edgesData, loadOpts) {
+    loadOpts = loadOpts || {};
     // graph.clear() below calls LiteGraph's own node.remove() on every
     // node currently on the canvas, which would otherwise fire a real
     // DELETE /nodes/{id} for each one via the onNodeRemoved hook set in
@@ -2247,7 +2532,7 @@
       // eventual Run action (see syncNodeToBackend()'s comment above
       // createPsfNode() for why POSTing each one individually here would
       // be redundant and would collide ids with the Session's own copy).
-      const node = createPsfNode(n.type, { id: n.id, config: n.config || {}, x, y, label: n.label, syncBackend: false });
+      const node = createPsfNode(n.type, { id: n.id, config: n.config || {}, x, y, label: n.label, syncBackend: false, staged: loadOpts.staged });
       if (node) idMap.set(n.id, node);
     });
     // suppressWireSync: this is a bulk stage-onto-canvas restore, same
@@ -2266,7 +2551,7 @@
         const tIdx = e.type === 'attribute' ? ensureAttributeSlot(t, e.target_port) : findInputSlotIndex(t, e.target_port || 'in');
         if (sIdx < 0 || tIdx < 0) return;
         const link = s.connect(sIdx, t, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       });
     } finally {
       suppressWireSync = false;
@@ -2469,7 +2754,7 @@
       const tIdx = findInputSlotIndex(sgNode, externalPort);
       if (sIdx >= 0 && tIdx >= 0) {
         const link = srcNode.connect(sIdx, sgNode, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       }
     });
     outboundBoundary.forEach((e) => {
@@ -2480,7 +2765,7 @@
       const tIdx = e.type === 'attribute' ? ensureAttributeSlot(tgtNode, e.target_port) : findInputSlotIndex(tgtNode, e.target_port);
       if (sIdx >= 0 && tIdx >= 0) {
         const link = sgNode.connect(sIdx, tgtNode, tIdx);
-        if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+        if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
       }
     });
     nodes.forEach((n) => { psfNodesById.delete(n.psfId); graph.remove(n); });
@@ -2536,7 +2821,7 @@
         const tIdx = e.type === 'attribute' ? ensureAttributeSlot(t, e.target_port) : findInputSlotIndex(t, e.target_port || 'in');
         if (sIdx >= 0 && tIdx >= 0) {
           const link = s.connect(sIdx, t, tIdx);
-          if (link) { link.psfKind = e.type || 'data'; link.color = KIND_COLORS[link.psfKind] || KIND_COLORS.data; }
+          if (link) { link.psfKind = e.type || 'data'; link.color = linkColor(link); }
         }
       });
 
@@ -2602,7 +2887,10 @@
       if (sessJson.error) { alert('Cannot run workflow: ' + sessJson.error); return; }
       currentSessionId = sessJson.id;
       const startJson = await fetchJSON(`/sessions/${currentSessionId}/start`, { method: 'POST' });
-      if (startJson.error) { alert('Cannot run workflow: ' + startJson.error); }
+      if (startJson.error) { alert('Cannot run workflow: ' + startJson.error); return; }
+      // Every canvas node now has a live backend instance (the session's,
+      // under the same id), so wires drawn from here on connect live again.
+      graph._nodes.forEach((n) => { n.psfStaged = false; });
     } catch (err) {
       alert('Failed to run workflow: ' + err.message);
     }
@@ -2741,7 +3029,7 @@
     row.querySelector('[data-act="load"]').onclick = async () => {
       const wf = await fetchJSON('/sessions/' + encodeURIComponent(sessionId) + '/workflow');
       if (wf.error) { toast(wf.error); return; }
-      loadWorkflowIntoGraph(wf.nodes || [], wf.edges || []);
+      loadWorkflowIntoGraph(wf.nodes || [], wf.edges || [], { staged: false });
       toast('Session loaded into canvas: ' + sessionId);
       closeModal();
     };
@@ -2919,6 +3207,7 @@
             ? await fetchJSON(`/nodes/${n.psfId}/last?n=${DISPLAY_HISTORY_LINES}`)
             : await fetchJSON(`/nodes/${n.psfId}/last?n=1`);
           const lastEntry = j.last && j.last.length ? j.last[j.last.length - 1] : null;
+          updateTilePreview(n, lastEntry);
           if (lastEntry) {
             nodeLastSeen[n.psfId] = now;
             // JSON.stringify as a cheap "did this actually change since
@@ -3041,6 +3330,150 @@
   }
 
   // ------------------------------------------------------------------
+  // Media previews in the live view (media plan phase 6a).
+  //
+  // The backend's /nodes/{id}/last runs every item through
+  // core/media.py's to_jsonable(), which turns a MediaItem into a
+  // summary object: {"$media": kind, mime, size, ref, meta, preview_url}.
+  // preview_url points at GET /media/{ref}, which - like every other
+  // non-exempt route - needs the API key. An <img src> can't send an
+  // Authorization header, so each preview is fetched through the
+  // auth-injecting window.fetch wrapper at the top of this file and shown
+  // from a blob: object URL instead.
+  // ------------------------------------------------------------------
+  const MEDIA_URL_CACHE_MAX = 32;
+  const MEDIA_GALLERY_MAX = 12;
+  // preview_url -> Promise<objectURL|null>, oldest first (Map keeps
+  // insertion order; a hit is re-inserted to mark it recently used).
+  const mediaUrlCache = new Map();
+
+  function findMediaItems(value, out, seen, depth) {
+    out = out || [];
+    seen = seen || new Set();
+    depth = depth || 0;
+    if (!value || typeof value !== 'object' || depth > 6) return out;
+    if (typeof value.$media === 'string' && value.preview_url) {
+      if (!seen.has(value.ref)) { seen.add(value.ref); out.push(value); }
+      return out;
+    }
+    const children = Array.isArray(value) ? value : Object.values(value);
+    children.forEach((v) => findMediaItems(v, out, seen, depth + 1));
+    return out;
+  }
+
+  function fetchMediaUrl(previewUrl) {
+    if (mediaUrlCache.has(previewUrl)) {
+      const hit = mediaUrlCache.get(previewUrl);
+      mediaUrlCache.delete(previewUrl);
+      mediaUrlCache.set(previewUrl, hit);
+      return hit;
+    }
+    const p = fetch(previewUrl)
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => (blob ? URL.createObjectURL(blob) : null))
+      .catch(() => null);
+    mediaUrlCache.set(previewUrl, p);
+    while (mediaUrlCache.size > MEDIA_URL_CACHE_MAX) {
+      const [oldKey, oldUrl] = mediaUrlCache.entries().next().value;
+      mediaUrlCache.delete(oldKey);
+      oldUrl.then((u) => { if (u) URL.revokeObjectURL(u); });
+    }
+    return p;
+  }
+
+  function formatBytes(n) {
+    if (n == null) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function mediaCaption(m) {
+    const meta = m.meta || {};
+    const parts = [m.$media, m.mime];
+    if (meta.width && meta.height) parts.push(`${meta.width}×${meta.height}`);
+    if (meta.duration != null) parts.push(`${Number(meta.duration).toFixed(2)} s`);
+    if (meta.pts != null) parts.push(`pts ${meta.pts}`);
+    parts.push(formatBytes(m.size));
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function mediaElementTag(m) {
+    const major = String(m.mime || '').split('/')[0];
+    if (major === 'image') return 'img';
+    if (major === 'audio' || m.$media === 'audio' || m.$media === 'audio_chunk') return 'audio';
+    if (major === 'video' || m.$media === 'video') return 'video';
+    return null;
+  }
+
+  // Render `media` (one summary object, or null to hide) into `container`.
+  // Re-rendering the same ref is a no-op, so a poll tick never restarts a
+  // playing <audio>/<video>. With opts.follow (the default, used by the
+  // sidebar), a video_frame/audio_chunk stream shows only its latest item
+  // - "last frame" mode, refreshed by the regular 1 s poll - with a pause
+  // button to freeze the current frame.
+  function renderMediaPreview(container, media, opts) {
+    const follow = !opts || opts.follow !== false;
+    if (!media) {
+      container.hidden = true;
+      container.replaceChildren();
+      delete container.dataset.ref;
+      return;
+    }
+    container.hidden = false;
+    if (container.dataset.ref === media.ref) return;
+    if (follow && container.dataset.paused === '1' && container.dataset.ref) return;
+    container.dataset.ref = media.ref;
+
+    const tag = mediaElementTag(media);
+    const stream = media.$media === 'video_frame' || media.$media === 'audio_chunk';
+    const existing = container.querySelector('[data-role="media"]');
+    let el = existing && existing.tagName.toLowerCase() === tag && tag === 'img' ? existing : null;
+    if (!el) {
+      container.replaceChildren();
+      if (tag) {
+        el = document.createElement(tag);
+        el.dataset.role = 'media';
+        if (tag !== 'img') el.controls = true;
+        if (tag === 'img') el.alt = mediaCaption(media);
+        container.appendChild(el);
+      } else {
+        const link = document.createElement('a');
+        link.dataset.role = 'media';
+        link.textContent = 'Download';
+        link.href = '#';
+        link.onclick = (e) => {
+          e.preventDefault();
+          fetchMediaUrl(media.preview_url).then((u) => { if (u) window.open(u, '_blank', 'noopener'); });
+        };
+        container.appendChild(link);
+      }
+      const cap = document.createElement('div');
+      cap.className = 'media-cap';
+      container.appendChild(cap);
+      if (follow && stream) {
+        const btn = document.createElement('button');
+        btn.className = 'secondary media-pause';
+        btn.type = 'button';
+        const sync = () => { btn.textContent = container.dataset.paused === '1' ? '▶ Follow live' : '⏸ Pause'; };
+        btn.onclick = () => { container.dataset.paused = container.dataset.paused === '1' ? '0' : '1'; sync(); };
+        sync();
+        container.appendChild(btn);
+      }
+    }
+    const cap = container.querySelector('.media-cap');
+    if (cap) cap.textContent = (stream && follow ? 'live · ' : '') + mediaCaption(media);
+    if (tag) {
+      const ref = media.ref;
+      fetchMediaUrl(media.preview_url).then((u) => {
+        if (container.dataset.ref !== ref) return; // a newer item arrived meanwhile
+        if (u) { el.src = u; container.classList.remove('expired'); }
+        else { container.classList.add('expired'); if (cap) cap.textContent = `${mediaCaption(media)} · expired`; }
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Details / advanced panel (right sidebar) - the one surviving
   // Inspector role per the chosen scope: advanced raw-JSON edit + live
   // status, everything else now lives inline on the node as widgets.
@@ -3049,7 +3482,15 @@
   function refreshDetailsPanel() {
     const panel = document.getElementById('details');
     if (!panel) return;
-    if (!selectedNode) { panel.innerHTML = '<p class="muted">No node selected. Click a node to see live status and advanced JSON here.</p>'; return; }
+    if (!selectedNode) {
+      // Legend for the port dtype colours (media plan phase 6b).
+      const legend = Object.entries(DTYPE_COLORS)
+        .map(([name, color]) => `<span class="dtype-chip"><i style="background:${color}"></i>${name}</span>`).join('');
+      panel.innerHTML = '<p class="muted">No node selected. Click a node to see live status and advanced JSON here.</p>'
+        + `<div class="dtype-legend"><div class="muted">Port types</div>${legend}`
+        + `<span class="dtype-chip"><i style="background:${DTYPE_WARN_COLOR}"></i>type mismatch (wire)</span></div>`;
+      return;
+    }
     const n = selectedNode;
     const doc = nodeDocs[n.psfType] || {};
     panel.innerHTML = `
@@ -3058,6 +3499,7 @@
       ${doc.desc ? `<p class="muted">${doc.desc}</p>` : ''}
       <button class="secondary" data-act="live">Refresh live view</button>
       <button class="secondary" data-act="json">Advanced JSON…</button>
+      <div id="liveMedia" class="live-media" hidden></div>
       <pre id="liveView">loading…</pre>
     `;
     panel.querySelector('[data-act="live"]').onclick = () => loadLive(n);
@@ -3068,6 +3510,13 @@
     fetchJSON(`/nodes/${node.psfId}/last?n=50`).then((j) => {
       const el = document.getElementById('liveView');
       if (!el) return;
+      // Media plan phase 6a: the newest image/audio/video item in this
+      // node's history gets a real preview above the JSON text.
+      const mediaEl = document.getElementById('liveMedia');
+      if (mediaEl) {
+        const media = findMediaItems((j.last || []).slice().reverse());
+        renderMediaPreview(mediaEl, media.length ? media[0] : null);
+      }
       // Feedback: "the sorting of the messages should be reversed (newest
       // on top)" - /nodes/{id}/last (BaseNode.get_last()) returns oldest-
       // to-newest, the order it's appended in; reverse it here, the same
@@ -3138,12 +3587,27 @@
     };
   }
   function openLiveModal(node) {
-    const overlay = openModal(`Live view — ${node.title || node.psfType}`, '<pre id="liveModalPre">loading…</pre>');
+    const overlay = openModal(`Live view — ${node.title || node.psfType}`,
+      '<div id="liveModalMedia" class="media-gallery" hidden></div><pre id="liveModalPre">loading…</pre>');
     fetchJSON(`/nodes/${node.psfId}/last?n=50`).then((j) => {
       const el = overlay.querySelector('#liveModalPre');
       // Same newest-first ordering as the sidebar's loadLive() above, for
       // consistency between the two live-view surfaces.
-      if (el) el.textContent = JSON.stringify((j.last || []).slice().reverse(), null, 2);
+      const entries = (j.last || []).slice().reverse();
+      if (el) el.textContent = JSON.stringify(entries, null, 2);
+      // Media plan phase 6a: a gallery of the newest distinct media items.
+      const gallery = overlay.querySelector('#liveModalMedia');
+      const media = findMediaItems(entries).slice(0, MEDIA_GALLERY_MAX);
+      if (gallery && media.length) {
+        gallery.hidden = false;
+        overlay.querySelector('.modal').classList.add('wide');
+        media.forEach((m) => {
+          const cell = document.createElement('div');
+          cell.className = 'live-media';
+          gallery.appendChild(cell);
+          renderMediaPreview(cell, m, { follow: false });
+        });
+      }
     });
   }
   function toast(msg) {
@@ -3176,6 +3640,16 @@
         const doc = nodeDocs[meta.type] || {};
         b.textContent = `${meta.icon} ${meta.label}`;
         b.title = doc.desc ? `${doc.desc}` : meta.label;
+        const missing = unavailableTypes[meta.type];
+        if (missing) {
+          // Media plan phase 3: greyed out, with the install hint, rather
+          // than creating a node the backend can't instantiate.
+          b.classList.add('unavailable');
+          b.title = `Not available on this server - ${missing}`;
+          b.onclick = () => toast(`${meta.label}: ${missing}`);
+          palette.appendChild(b);
+          return;
+        }
         b.onclick = () => { createPsfNode(k); graphcanvas.setDirty(true, true); };
         palette.appendChild(b);
       });
@@ -3233,12 +3707,16 @@
   async function init() {
     themeLiteGraph();
     try {
-      const [ps, cs] = await Promise.all([
+      const [ps, cs, av, pd] = await Promise.all([
         fetchJSON('/node-schema').catch(() => ({})),
         fetchJSON('/config-schema').catch(() => ({})),
+        fetchJSON('/node-availability').catch(() => ({})),
+        fetchJSON('/port-dtypes').catch(() => ({})),
       ]);
       portSchema = ps || {};
       configSchema = cs || {};
+      portDtypes = (pd && pd.types) || {};
+      unavailableTypes = (av && av.unavailable) || {};
     } catch (e) { /* fall back to defaults baked into rebuildPorts */ }
 
     buildNodeClasses();

@@ -1,15 +1,18 @@
 import asyncio
 import logging
 import pathlib
+import re
 from contextlib import asynccontextmanager
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.routing import get_route_path
 
+from ..core.blob_store import ensure_cleanup_task, get_blob_store, stop_cleanup_task
+from ..core.media import sniff_mime, to_jsonable
 from ..core.models import Edge, Graph, Node
 from ..core.persistence import load_workflow, save_workflow
 from ..core.plugin_manager import PluginManager
@@ -38,7 +41,14 @@ async def _lifespan(_app):
     # `uvicorn.run(app, ...)` path relies on too, so both ways of running
     # this server enter the identical lifespan.
     async with mcp_lifespan(mcp_app):
-        yield
+        # Periodic expiry/eviction of media blobs (media plan phase 1.2) -
+        # also needed for ad-hoc editor nodes that never run through an
+        # Engine, which would otherwise be the only thing starting it.
+        ensure_cleanup_task()
+        try:
+            yield
+        finally:
+            await stop_cleanup_task()
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -317,7 +327,7 @@ def docs(path: str):
 
 @app.get("/nodes")
 def list_nodes():
-    return {nid: {"type": type(node).__name__, "config": node.config, "health": node.health()} for nid, node in _nodes.items()}
+    return to_jsonable({nid: {"type": type(node).__name__, "config": node.config, "health": node.health()} for nid, node in _nodes.items()})
 
 @app.get("/node-schema")
 def node_schema():
@@ -333,6 +343,25 @@ def node_schema():
     """
     from ..core.port_schema import all_port_schemas
     return all_port_schemas()
+
+@app.get("/port-dtypes")
+def port_dtypes():
+    """Per-node-type port data types (media plan phase 6b,
+    core/port_schema.py): {"dtypes": [...], "types": {type: {"inputs":
+    {port: dtype}, "outputs": {port: dtype}}}}. Ports not listed are
+    "any". Kept separate from /node-schema so that endpoint's shape stays
+    exactly as it was."""
+    from ..core.port_schema import DTYPES, all_port_dtypes
+    return {"dtypes": list(DTYPES), "types": all_port_dtypes()}
+
+@app.get("/node-availability")
+def node_availability():
+    """Node types the editor knows about but this installation can't run,
+    because an optional dependency is missing (media plan phase 3: the
+    image nodes need Pillow) - {"unavailable": {type: hint}}. The editor
+    greys these out in its palette."""
+    from ..nodes import UNAVAILABLE_NODE_TYPES
+    return {"unavailable": dict(UNAVAILABLE_NODE_TYPES)}
 
 @app.get("/config-schema")
 def config_schema():
@@ -394,7 +423,7 @@ def get_config(node_id: str, hidden: bool = False):
     cfg = node.config
     if not hidden:
         cfg = {k:v for k,v in cfg.items() if not k.startswith('_')}
-    result = {"node": node_id, "config": cfg}
+    result = {"node": node_id, "config": to_jsonable(cfg)}
     # See http_endpoint_info()'s own docstring (core/web_server.py): raw
     # config alone doesn't tell a caller the node's real, effective HTTP
     # route (e.g. the "/api/" prefix an ApiInputNode's route actually
@@ -410,7 +439,37 @@ def node_last(node_id: str, n: int = 50):
     node = _nodes.get(node_id)
     if not node:
         return {"error": "node not found"}
-    return {"node": node_id, "last": node.get_last(n) if hasattr(node, "get_last") else []}
+    # to_jsonable(): binary payloads become {"$binary": size, "head": ...}
+    # and MediaItems a summary + preview_url, instead of FastAPI's own
+    # encoder calling bytes.decode() and failing with a 500 (media plan
+    # phase 1.4).
+    return to_jsonable({"node": node_id, "last": node.get_last(n) if hasattr(node, "get_last") else []})
+
+# MIME types GET /media/{ref} will serve as given in its `mime` query
+# parameter. Anything else (text/html, image/svg+xml, ...) is served as
+# application/octet-stream so a stored blob can never be rendered as an
+# active document in the API's own origin.
+_MEDIA_MIME_RE = re.compile(r"^(image/(png|jpeg|gif|webp|bmp|tiff)|audio/[\w.+-]+|video/[\w.+-]+|application/octet-stream)$")
+
+
+@app.get("/media/{ref}")
+def get_media(ref: str, mime: str | None = None):
+    """Serve one blob from the media blob store (core/blob_store.py) - the
+    target of a MediaItem's `preview_url` in the live view (media plan
+    phase 1.4). FileResponse handles `Range` requests, so <audio>/<video>
+    elements can seek. Behind the same API-key middleware as every other
+    non-exempt route."""
+    store = get_blob_store()
+    if not store.exists(ref):
+        return JSONResponse(status_code=404, content={"error": "media not found (unknown or expired ref)"})
+    if not mime or not _MEDIA_MIME_RE.match(mime):
+        mime = sniff_mime(store.read_head(ref, 64)) or "application/octet-stream"
+        if not _MEDIA_MIME_RE.match(mime):
+            mime = "application/octet-stream"
+    return FileResponse(
+        store.path(ref), media_type=mime,
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=600"},
+    )
 
 @app.get("/nodes/{node_id}/stats")
 def node_stats(node_id: str):
@@ -504,7 +563,7 @@ async def node_emit(node_id: str):
     if not hasattr(node, 'manual_emit'):
         return {"error": "node does not support manual emit"}
     replayed = node.manual_emit()
-    return {"status": "emitted", "node": node_id, "replayed": replayed}
+    return {"status": "emitted", "node": node_id, "replayed": to_jsonable(replayed)}
 
 class NodeCreateReq(BaseModel):
     node_id: str
@@ -550,6 +609,9 @@ class ConnectReq(BaseModel):
     # making at all, unlike Edge/the /workflows path. Defaults to "data"
     # so existing callers that don't send it behave exactly as before.
     type: str = "data"
+    # Optional queue settings for this edge, same as a workflow edge's
+    # `buffer` ({maxsize, drop_policy}; media plan phase 1.5).
+    buffer: dict | None = None
 
 # _attribute_pump_tasks/_cancel_attribute_pump used to be defined here as
 # this module's own private state. Moved into core/engine.py (alongside
@@ -578,8 +640,8 @@ from ..core.engine import _attribute_pump_tasks, _cancel_attribute_pump, _edge_p
 
 @app.post("/nodes/connect")
 async def connect_nodes(req: ConnectReq):
-    from ..core.port_schema import validate_edge
-    from ..core.stream import Pipe
+    from ..core.engine import edge_pipe, validate_buffer
+    from ..core.port_schema import edge_warning, validate_edge
     src = _nodes.get(req.source_id)
     tgt = _nodes.get(req.target_id)
     if not src or not tgt:
@@ -591,10 +653,10 @@ async def connect_nodes(req: ConnectReq):
     # core/port_schema.py's module docstring for why that used to happen).
     err = validate_edge(
         type(src).__name__, req.source_port, type(tgt).__name__, req.target_port, req.type,
-    )
+    ) or validate_buffer(req.buffer)
     if err:
         return {"error": err}
-    pipe = Pipe()
+    pipe = edge_pipe(src, req.source_port, req.buffer)
     # Phase 2 of the wire-kind-unification design: a 'raw' edge is wired
     # exactly like a 'data' edge below - the only difference is the
     # delivery kind recorded against this consumer, which is what makes
@@ -642,7 +704,9 @@ async def connect_nodes(req: ConnectReq):
         _attribute_pump_tasks[key] = asyncio.create_task(_pump_attribute(pipe, tgt, req.target_port))
     else:
         tgt.add_input(req.target_port, pipe)
-    return {"status": "connected"}
+    # Port-dtype mismatch (media plan phase 6b): connected anyway, reported.
+    warning = edge_warning(type(src).__name__, req.source_port, type(tgt).__name__, req.target_port, req.type)
+    return {"status": "connected", "warning": warning} if warning else {"status": "connected"}
 
 @app.delete("/nodes/connect")
 async def disconnect_nodes(req: ConnectReq):
@@ -755,8 +819,9 @@ class WorkflowModel(BaseModel):
 
 @app.post("/workflows")
 def save_workflow_api(wf: WorkflowModel):
-    from ..core.port_schema import validate_edge
+    from ..core.port_schema import edge_warning, validate_edge
     graph = Graph()
+    warnings = []
     for n in wf.nodes:
         graph.add_node(Node(**n))
     node_types = {n.id: n.type for n in graph.nodes}
@@ -774,11 +839,18 @@ def save_workflow_api(wf: WorkflowModel):
         err = validate_edge(src_type, edge.source_port, tgt_type, edge.target_port, edge.type)
         if err:
             return {"error": f"invalid edge {edge.source}->{edge.target}: {err}"}
+        # Port-dtype mismatch (media plan phase 6b): saved anyway, reported.
+        warning = edge_warning(src_type, edge.source_port, tgt_type, edge.target_port, edge.type)
+        if warning:
+            warnings.append(warning)
         graph.add_edge(edge)
     import uuid
     fname = f"/tmp/workflow_{uuid.uuid4().hex}.yaml"
     save_workflow(graph, fname)
-    return {"status":"saved","path":fname}
+    result = {"status":"saved","path":fname}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @app.get("/workflows")
 def list_workflows():
@@ -867,7 +939,7 @@ def write_subgraph_file(req: SubgraphFileWriteReq):
         edge = Edge(
             source=e["source"], target=e["target"],
             source_port=e.get("source_port", "out"), target_port=e.get("target_port", "in"),
-            type=e.get("type", "data"),
+            type=e.get("type", "data"), buffer=e.get("buffer"),
         )
         src_type = node_types.get(edge.source)
         tgt_type = node_types.get(edge.target)
@@ -1001,7 +1073,7 @@ def get_session_workflow(session_id: str):
     if not sess.graph:
         return {"error": "no graph"}
     return {
-        "nodes": [vars(n) for n in sess.graph.nodes],
+        "nodes": to_jsonable([vars(n) for n in sess.graph.nodes]),
         "edges": [vars(e) for e in sess.graph.edges]
     }
 
@@ -1048,14 +1120,14 @@ def get_session_node(session_id: str, node_id: str):
         "id": node_id,
         "session_id": session_id,
         "type": type(node).__name__,
-        "config": node.config,
+        "config": to_jsonable(node.config),
         "inputs": {k: {"stats": p.stats()} for k, p in node.inputs.items()},
         # Phase 1 fan-out change: an output port can now have several live
         # consumer pipes, so its stats are a list (one per consumer) instead of
         # a single dict - see core/node.py's BaseNode.outputs docstring.
         "outputs": {k: {"stats": [{**p.stats(), "kind": kind} for p, kind in pipes]} for k, pipes in node.outputs.items()},
         "health": node.health(),
-        "last_items": node.get_last() if hasattr(node, "get_last") else [],
+        "last_items": to_jsonable(node.get_last() if hasattr(node, "get_last") else []),
     }
 
 # Reflection API
@@ -1066,7 +1138,7 @@ def reflection_nodes():
         h = node.health()
         result[nid] = {
             "type": type(node).__name__,
-            "config": {k:v for k,v in node.config.items() if not k.startswith('_')},
+            "config": to_jsonable({k:v for k,v in node.config.items() if not k.startswith('_')}),
             "inputs": list(node.inputs.keys()),
             "outputs": list(node.outputs.keys()),
             "health": h.get("health"),
@@ -1086,12 +1158,12 @@ def reflection_node(node_id: str):
     result = {
         "id": node_id,
         "type": type(node).__name__,
-        "config": node.config,
+        "config": to_jsonable(node.config),
         "inputs": {k: {"stats": p.stats()} for k,p in node.inputs.items()},
         # Phase 1 fan-out change: see the matching comment above.
         "outputs": {k: {"stats": [{**p.stats(), "kind": kind} for p, kind in pipes]} for k, pipes in node.outputs.items()},
         "health": h,
-        "last_items": node.get_last() if hasattr(node, "get_last") else []
+        "last_items": to_jsonable(node.get_last() if hasattr(node, "get_last") else []),
     }
     endpoint = http_endpoint_info(node)
     if endpoint is not None:

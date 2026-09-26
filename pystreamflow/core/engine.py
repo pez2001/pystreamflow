@@ -1,12 +1,15 @@
 import asyncio
 import logging
+import os
 import pathlib
 
 from .models import Graph
 from .plugin_manager import PluginManager
-from .port_schema import validate_edge
+from .port_schema import edge_warning, validate_edge
 from .registry import build_node_registry
-from .stream import Pipe
+from .blob_store import ensure_cleanup_task
+from .media import MediaItem
+from .stream import DROP_POLICIES, Pipe
 
 logger = logging.getLogger("pystreamflow.engine")
 
@@ -42,9 +45,56 @@ def _clean_attribute_value(item):
     non-scalar value, a list, an already-bare scalar) passes through
     unchanged rather than guessing at a shape that isn't there.
     """
+    if isinstance(item, MediaItem):
+        # A media item is already the bare value - never unwrap or copy it
+        # (media plan phase 1.3).
+        return item
     if isinstance(item, dict) and isinstance(item.get('value'), _ATTRIBUTE_SCALAR_TYPES):
         return item['value']
     return item
+
+
+def media_edge_maxsize() -> int:
+    """Default queue bound for edges leaving a media output port
+    (``PSF_MEDIA_EDGE_MAXSIZE``, default 8)."""
+    return int(os.environ.get('PSF_MEDIA_EDGE_MAXSIZE', '8'))
+
+
+def validate_buffer(buffer) -> str | None:
+    """Check an edge's optional ``buffer`` config; returns an error
+    message, or ``None`` if it's fine."""
+    if buffer is None:
+        return None
+    if not isinstance(buffer, dict):
+        return "buffer must be a mapping like {maxsize: 8, drop_policy: drop}"
+    unknown = set(buffer) - {'maxsize', 'drop_policy'}
+    if unknown:
+        return f"unknown buffer setting(s): {', '.join(sorted(unknown))}"
+    maxsize = buffer.get('maxsize', 0)
+    if isinstance(maxsize, bool) or not isinstance(maxsize, int) or maxsize < 0:
+        return "buffer.maxsize must be a non-negative integer (0 = unbounded)"
+    policy = buffer.get('drop_policy', 'block')
+    if policy not in DROP_POLICIES:
+        return f"buffer.drop_policy must be one of {', '.join(DROP_POLICIES)}"
+    return None
+
+
+def edge_pipe(src_node, source_port: str, buffer: dict | None = None) -> Pipe:
+    """Build the Pipe for one edge (media plan phase 1.5).
+
+    An explicit ``buffer`` from the workflow wins. Otherwise an edge
+    leaving one of the source node class's ``MEDIA_OUTPUT_PORTS`` gets a
+    bounded queue (``media_edge_maxsize()``) with that port's declared
+    drop policy, so a slow consumer can't make a stream of video frames
+    grow memory without limit. Every other edge stays unbounded, exactly
+    as before.
+    """
+    if buffer:
+        return Pipe(maxsize=int(buffer.get('maxsize', 0)), drop_policy=buffer.get('drop_policy', 'block'))
+    policy = getattr(type(src_node), 'MEDIA_OUTPUT_PORTS', {}).get(source_port)
+    if policy:
+        return Pipe(maxsize=media_edge_maxsize(), drop_policy=policy)
+    return Pipe()
 
 
 async def _pump_attribute(pipe, target_node, attr_name):
@@ -142,6 +192,14 @@ class Engine:
         # Check all nodes referenced in edges exist
         node_ids = {n.id for n in self.graph.nodes}
         node_types = {n.id: n.type for n in self.graph.nodes}
+        # A known node type whose optional dependency isn't installed
+        # (media plan phase 3 - e.g. the image nodes without Pillow) must
+        # fail loudly here, not fall back to _instantiate_nodes()' silent
+        # no-op node.
+        from ..nodes import UNAVAILABLE_NODE_TYPES
+        for n in self.graph.nodes:
+            if n.type in UNAVAILABLE_NODE_TYPES:
+                raise ValueError(f"Node {n.id}: {n.type} is not available - {UNAVAILABLE_NODE_TYPES[n.type]}")
         for e in self.graph.edges:
             if e.source not in node_ids:
                 raise ValueError(f"Edge source {e.source} not found")
@@ -158,9 +216,13 @@ class Engine:
             # closes.
             err = validate_edge(
                 node_types[e.source], e.source_port, node_types[e.target], e.target_port, e.type,
-            )
+            ) or validate_buffer(getattr(e, 'buffer', None))
             if err:
                 raise ValueError(f"Invalid edge {e.source}->{e.target}: {err}")
+            # Port-dtype mismatch (media plan phase 6b): advisory only.
+            warning = edge_warning(node_types[e.source], e.source_port, node_types[e.target], e.target_port, e.type)
+            if warning:
+                logger.warning("workflow edge %s->%s: %s", e.source, e.target, warning)
         # Check for cycles via Kahn's algorithm
         in_degree = {n.id: 0 for n in self.graph.nodes}
         adj = {n.id: [] for n in self.graph.nodes}
@@ -226,9 +288,19 @@ class Engine:
 
     def _wire_edges(self):
         for e in self.graph.edges:
-            pipe = self.pipes.setdefault((e.source, e.target), Pipe())
             src_node = self.node_instances[e.source]
             tgt_node = self.node_instances[e.target]
+            # One pipe per edge. This used to be keyed by the node pair
+            # (source, target) alone, so two edges between the same two
+            # nodes - e.g. VideoDecodeNode's out->in and audio->audio into
+            # one VideoEncodeNode, or LMStudioNode's results and stats into
+            # one sink - silently shared a single pipe: the target's two
+            # input ports both read from it and items landed on whichever
+            # port happened to read first.
+            key = (e.source, e.source_port, e.target, e.target_port, e.type)
+            if key not in self.pipes:
+                self.pipes[key] = edge_pipe(src_node, e.source_port, getattr(e, 'buffer', None))
+            pipe = self.pipes[key]
             # Phase 2 of the wire-kind-unification design: a 'raw' edge
             # wires exactly like a 'data' edge (same target-side add_input()
             # below) - the only difference is the delivery kind recorded on
@@ -296,6 +368,9 @@ class Engine:
         self.validate()
         self._instantiate_nodes()
         self._wire_edges()
+        # Expire/evict media blobs in the background while anything runs
+        # (media plan phase 1.2). Shared by every Engine in the process.
+        ensure_cleanup_task()
 
         # Start every node, in topological order, up front.
         #

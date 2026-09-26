@@ -1,3 +1,4 @@
+from ..core.media import to_jsonable
 from ..core.node import BaseNode
 import asyncio
 import json
@@ -23,7 +24,10 @@ class JSONOutputNode(BaseNode):
                 try:
                     item = await asyncio.wait_for(pipe.get(), timeout=1.0)
                     try:
-                        out = json.dumps(item, indent=2) if self.pretty else json.dumps(item)
+                        # to_jsonable(): media items/bytes become JSON-safe
+                        # summaries (media plan phase 7) instead of failing
+                        data = to_jsonable(item)
+                        out = json.dumps(data, indent=2) if self.pretty else json.dumps(data)
                     except TypeError as e:
                         # A non-JSON-serializable item (bytes, a custom
                         # object, ...) used to raise uncaught here,
